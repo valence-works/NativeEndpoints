@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="branding/banner.png" alt="NativeEndpoints — structured endpoints, native ASP.NET Core" width="100%">
+</p>
+
 # NativeEndpoints
 
 **A structured programming model for ASP.NET Core Minimal APIs.**
