@@ -118,8 +118,9 @@ The documented schema stays `InvoiceView`; the wrapper never reaches the wire.
 Precedence is **route, then body, then query**. Route wins over the body so a resource identifier in
 the URL cannot be contradicted by the payload.
 
-Built in: `string`, `bool`, `int`, `long`, `Guid`, `enum`, `DateTimeOffset`, anything implementing
-`IParsable<T>`, arrays and lists of those from the query string, plus headers and claims.
+Built in today: `string`, `bool`, `int`, `long`, `Guid`, `enum`, and `DateTimeOffset`, from route
+values and the query string, plus a JSON body. Headers, claims, query collections, and
+`IParsable<T>` are next, along with the value-binder registration below.
 
 Anything else throws, loudly, rather than binding silently to a default. With the source generator
 enabled that throw becomes a build error:
@@ -127,12 +128,6 @@ enabled that throw becomes a build error:
 ```
 NE0004: Contract 'Transfer' has parameter 'amount' of unsupported type 'Money'.
         Register a value binder or use a supported type.
-```
-
-Register your own:
-
-```csharp
-builder.Services.AddNativeEndpoints(o => o.AddValueBinder<Money>(Money.TryParse));
 ```
 
 Body handling is explicit per endpoint via `options.BodyMode`: `None`, `Optional`, `Required`, or
@@ -218,7 +213,7 @@ Choose NativeEndpoints when you want the endpoint-class shape and nothing else.
 | Escape hatch | `IEndpointConventionBuilder` | Framework-specific |
 | Registration | Generated, or explicit local scan | Process-global discovery |
 | Collectible unloading | Verified by a test you can run | Not supported |
-| Binding sources | Route, body, query, header, claim | Route, query, claim, form, body, header |
+| Binding sources | Route, body, query | Route, query, claim, form, body, header |
 | Forms and file upload | Not supported | Supported |
 | Validation | Bring your own | FluentValidation, built in |
 | Package dependencies | None | Several |
@@ -241,11 +236,15 @@ other respect. It is the reason this library exists.
 
 ## Documentation
 
-[Getting started](docs/getting-started.md) &middot;
-[Binding](docs/binding.md) &middot;
-[Problem details](docs/problem-details.md) &middot;
-[Unload safety](docs/unload-safety.md) &middot;
-[Migrating from FastEndpoints](docs/migrating-from-fastendpoints.md)
+Full documentation lives in the [wiki](https://github.com/valence-works/NativeEndpoints/wiki),
+published from [`docs/`](docs) on every push to `main`.
+
+[Getting started](docs/Getting-Started.md) &middot;
+[Endpoint classes](docs/Endpoint-Classes.md) &middot;
+[Binding](docs/Binding.md) &middot;
+[Problem details](docs/Problem-Details.md) &middot;
+[Unload safety](docs/Unload-Safety.md) &middot;
+[Migrating from FastEndpoints](docs/Migrating-from-FastEndpoints.md)
 
 ## Contributing
 

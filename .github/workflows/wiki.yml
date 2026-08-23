@@ -1,0 +1,53 @@
+name: wiki
+
+# The wiki is generated, not authored. docs/ in this repository is the source of truth; the GitHub
+# wiki is a published copy, overwritten on every push to main. Editing a page through the wiki UI
+# will be silently reverted by the next push, which is what _Footer.md warns readers about.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/wiki.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Check out the wiki
+        run: |
+          git clone \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git" \
+            wiki
+
+      - name: Sync docs into the wiki
+        run: |
+          # Delete first so a page removed from docs/ disappears from the wiki too. Keeping .git is
+          # what makes this a sync rather than an orphaned re-push.
+          find wiki -mindepth 1 -maxdepth 1 -not -name '.git' -exec rm -rf {} +
+          cp docs/*.md wiki/
+          ls -la wiki/
+
+      - name: Commit and push
+        working-directory: wiki
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already matches docs/; nothing to publish."
+            exit 0
+          fi
+          git commit -m "docs: sync wiki from ${GITHUB_SHA:0:7}"
+          git push

@@ -62,8 +62,7 @@ public static class ApiEndpointMapper
 
         if (options.Method is null || options.Route is null)
             throw new InvalidOperationException($"Endpoint '{type.FullName}' declares no route. Add a [Get]/[Post]/... attribute or set options.Method and options.Route in Configure.");
-        if (string.IsNullOrWhiteSpace(options.Operation))
-            throw new InvalidOperationException($"Endpoint '{type.FullName}' declares no operation identifier. Set options.Operation in Configure.");
+        options.Operation ??= DeriveOperation(type);
 
         var (shape, request, response) = FindContract(type)
             ?? throw new InvalidOperationException($"Endpoint '{type.FullName}' does not derive from an ApiEndpoint base.");
@@ -177,6 +176,32 @@ public static class ApiEndpointMapper
             endpoint.HttpContext = context;
             return await endpoint.HandleAsync(request, cancellationToken);
         });
+    }
+
+    /// <summary>
+    /// Derives the operation identifier from where the endpoint class lives.
+    /// </summary>
+    /// <remarks>
+    /// The segments after an <c>Endpoints</c> namespace segment, concatenated: a class in
+    /// <c>Billing.Endpoints.Invoices.Get</c> becomes <c>InvoicesGet</c>. This is why the convention
+    /// puts one operation per folder, and why the class itself can just be called <c>Endpoint</c>.
+    /// Without such a segment the class name is used, falling back to the last namespace segment when
+    /// the class is itself named <c>Endpoint</c>. Setting <c>options.Operation</c> always wins.
+    /// </remarks>
+    private static string DeriveOperation(Type type)
+    {
+        var segments = (type.Namespace ?? string.Empty).Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var marker = Array.LastIndexOf(segments, "Endpoints");
+        if (marker >= 0 && marker < segments.Length - 1)
+            return string.Concat(segments[(marker + 1)..]);
+
+        if (!string.Equals(type.Name, "Endpoint", StringComparison.Ordinal))
+            return type.Name;
+
+        return segments.Length > 0
+            ? segments[^1]
+            : throw new InvalidOperationException(
+                $"Endpoint '{type.FullName}' has no operation identifier and none can be derived from its name or namespace. Set options.Operation in Configure.");
     }
 
     private static string Prefix(string? prefix, string route) =>
