@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Compatibility and collectibility test kit. It deliberately does not reference NativeEndpoints:
+    the unload harness must work against any endpoint framework, including the one you are
+    migrating away from.
+  -->
+  <PropertyGroup>
+    <Description>Test kit for ASP.NET Core endpoint assemblies: collectible load-and-unload evidence, and before/after HTTP and OpenAPI compatibility comparison.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

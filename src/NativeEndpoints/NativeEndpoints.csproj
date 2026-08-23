@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The endpoint-class framework. It takes a framework reference and nothing else: no PackageReference,
+    so a consumer inherits no transitive NuGet graph and the only ASP.NET Core coupling is the TFM.
+  -->
+  <PropertyGroup>
+    <Description>A structured programming model for ASP.NET Core Minimal APIs. One class per endpoint, ordinary ASP.NET Core underneath.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

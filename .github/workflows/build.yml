@@ -1,0 +1,59 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore NativeEndpoints.slnx
+
+      - name: Build
+        run: dotnet build NativeEndpoints.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test NativeEndpoints.slnx --configuration Release --no-build --verbosity normal
+
+      # Prereleases are numbered from the run, so every green main build is installable from
+      # GitHub Packages. nuget.org opens at 1.0.0-preview.1, on the gates in the README.
+      - name: Pack
+        run: >
+          dotnet pack NativeEndpoints.slnx --configuration Release --no-build
+          --output artifacts
+          -p:Version=1.0.0-alpha.${{ github.run_number }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/*
+
+      - name: Publish to GitHub Packages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --source https://nuget.pkg.github.com/valence-works/index.json
+          --api-key ${{ secrets.GITHUB_TOKEN }}
+          --skip-duplicate
