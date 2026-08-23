@@ -5,6 +5,22 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
 
+  <ItemGroup Label="Samples">
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
+
+    <!--
+      Transitive pin: nothing references Microsoft.OpenApi directly. Because
+      CentralPackageTransitivePinningEnabled is true (above), a PackageVersion with no matching
+      PackageReference is how a transitive dependency's version gets pinned - here the one
+      Microsoft.AspNetCore.OpenApi pulls in. Deleting this silently changes what restores: without it
+      the graph resolves 2.0.0, which carries a high-severity advisory (GHSA-v5pm-xwqc-g5wc).
+
+      Note this affects the sample only. The NativeEndpoints package itself has no PackageReference
+      at all, so no consumer of the library inherits any of this.
+    -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
+  </ItemGroup>
+
   <ItemGroup Label="Test kit">
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.10" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />

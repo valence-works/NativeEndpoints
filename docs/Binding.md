@@ -44,13 +44,26 @@ bug you find on the first request.
 | Mode | Behavior |
 |---|---|
 | `None` | No body is read. Values come from route and query only |
-| `Required` | A JSON body is required. A content type that is present but not JSON is a 415; an absent content type still attempts the body, so an empty or malformed payload is a 400 |
-| `RequiredWithContentType` | As `Required`, but an absent content type is also unsupported media, and the rejection is a bare 415 with no response body |
+| `Required` | A JSON body is required. An absent content type still attempts the body, so an empty or malformed payload is a 400 |
+| `RequiredWithContentType` | As `Required`, but an absent content type is also unsupported media |
 | `Optional` | A JSON body is read when present; its absence binds from route and query instead |
+| `OptionalWithContentType` | As `Optional`, but the content type must match when one is declared |
 
-`RequiredWithContentType` exists to reproduce published contracts that check media type before
-reading anything and answer with a status and no body. Prefer `Required` for new endpoints, which
-reports the failure through your problem shape.
+## Who answers a 415
+
+Mostly not this library, and that is worth knowing before you go looking for the code.
+
+Declaring `options.Accepts` puts an `AcceptsMetadata` item on the endpoint, and ASP.NET Core's own
+`AcceptsMatcherPolicy` uses it **during routing**. A request whose Content-Type does not match is
+rejected there, before any handler runs, with a bare `415` and no body. That is the same behavior you
+get from `MapPost(...).Accepts<T>("application/json")`, and it is ordinary ASP.NET Core doing its job.
+
+The binder's own media-type check only comes into play when routing let the request through — for
+example when `Accepts` includes `*/*`, or when it is not declared at all. Then the failure runs
+through your `IEndpointProblemWriter` and carries a problem document.
+
+So: if you want a bare 415 from routing, declare a narrow `Accepts`. If you want a problem body,
+widen `Accepts` (`["*/*", "application/json"]` is the usual shape) and let the binder answer.
 
 ## Documented request schemas
 

@@ -1,7 +1,10 @@
 # Samples
 
-Samples land here as the library takes shape. Planned:
+- **[Minimal](Minimal)** — five endpoints over an in-memory store. No authentication, no database,
+  no configuration. Run it with `dotnet run --project samples/Minimal`.
 
-- `Minimal` — five endpoints, no authentication, nothing else.
-- `VerticalSlice` — a fuller resource with permissions and problem translation.
-- `PluginHost` — a collectible load context, proving the unload guarantee end to end.
+Planned:
+
+- **VerticalSlice** — a fuller resource with permissions, problem translation, and a source-generated
+  serializer context.
+- **PluginHost** — a collectible load context, proving the unload guarantee end to end.
