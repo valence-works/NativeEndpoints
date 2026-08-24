@@ -22,11 +22,24 @@
     <RepositoryUrl>https://github.com/valence-works/NativeEndpoints</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageTags>aspnetcore;minimal-api;endpoints;vertical-slice;openapi</PackageTags>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+
+  <!--
+    The package icon, shared by every packable project. Sourced from the branding folder and packed
+    as icon.png to match PackageIcon above. Non-packable projects ignore it, so this can live here
+    rather than being repeated per project.
+  -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)branding/native-endpoints-logo.png"
+          Pack="true"
+          PackagePath="icon.png"
+          Visible="false" />
+  </ItemGroup>
 
 </Project>
