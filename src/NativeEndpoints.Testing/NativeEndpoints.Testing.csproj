@@ -8,6 +8,15 @@
   <PropertyGroup>
     <Description>Test kit for ASP.NET Core endpoint assemblies: collectible load-and-unload evidence, and before/after HTTP and OpenAPI compatibility comparison.</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!--
+      CS1591 is an error in the core library, where the public API is the product. Here it is
+      suppressed: the kit's surface is mostly evidence records whose members are the HTTP and OpenAPI
+      facts they are named after (Status, Headers, Body), and 137 restatements of the obvious would
+      bury the type-level documentation that carries the actual meaning. The XML file still ships, so
+      consumers keep IntelliSense for everything that is documented.
+    -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

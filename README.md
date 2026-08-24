@@ -184,10 +184,10 @@ the context:
 
 ```csharp
 [Fact]
-public async Task Module_unloads()
+public void Endpoint_assemblies_are_collected()
 {
-    var evidence = await CollectibleEndpointFixture.RunCyclesAsync(cycles: 3);
-    UnloadEvidence.Verify(evidence, gcRounds: 32);
+    var evidence = CollectibleEndpointFixture.RunCycles(cycles: 3);
+    UnloadEvidence.AssertAllCollected(evidence);
 }
 ```
 
@@ -195,8 +195,12 @@ public async Task Module_unloads()
 dotnet add package NativeEndpoints.Testing
 ```
 
-The harness has no dependency on NativeEndpoints itself, so you can point it at whatever you are
-using today and see what you get.
+The kit has no dependency on NativeEndpoints itself. What the harness measures today is its own
+synthetic endpoint assembly, which is what proves the pattern rather than the library's marketing;
+it can also be asked to introduce a deliberate leak, so you can confirm it still detects one.
+Measuring *your* host means the shape in [`samples/PluginHost`](samples/PluginHost), where a real
+plugin is loaded, served, unloaded, and counted. A hook for driving another framework's registration
+inside the harness is planned, not shipped.
 
 ## Compared to FastEndpoints
 

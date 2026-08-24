@@ -77,19 +77,35 @@ dotnet add package NativeEndpoints.Testing
 
 ```csharp
 [Fact]
-public async Task Module_unloads()
+public void Endpoint_assemblies_are_collected()
 {
-    var evidence = await CollectibleEndpointFixture.RunCyclesAsync(cycles: 3);
-    UnloadEvidence.Verify(evidence, gcRounds: 32);
+    var evidence = CollectibleEndpointFixture.RunCycles(cycles: 3);
+    UnloadEvidence.AssertAllCollected(evidence);
 }
+```
+
+`RunCycles` runs several independent load, map, serve, dispose, and unload cycles rather than one,
+because the interesting kind of leak accumulates across generations: a single cycle can pass while
+registrations pile up behind it. `Verify` reports; `AssertAllCollected` fails the test and names the
+stage that still roots the context.
+
+Ask for a deliberate leak to confirm the harness still detects one:
+
+```csharp
+using var run = CollectibleEndpointFixture.Create(RetentionStage.Route);
+var evidence = UnloadEvidence.Verify(run, maxAttempts: 4);
+Assert.False(evidence.Collected);
 ```
 
 The harness compiles a synthetic endpoint assembly, loads it into a collectible context, maps it,
 serves a request, disposes the host, unloads, forces repeated full collections, and reports which
 stage still roots the context.
 
-It has no dependency on NativeEndpoints, so you can point it at whatever you use today and measure
-that instead. Measuring before you migrate is a better reason to migrate than a README is.
+The kit has no dependency on NativeEndpoints. What it measures today is its own synthetic endpoint
+assembly, which is what proves the pattern. Measuring *your* host means the shape in
+`samples/PluginHost`: your own collectible context, your own plugin, loaded, served, unloaded, and
+counted. A hook for driving another framework's registration inside the harness is planned, not
+shipped.
 
 ## Honest limits
 
