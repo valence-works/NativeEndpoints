@@ -9,3 +9,6 @@ artifacts/
 *.nupkg
 *.snupkg
 .DS_Store
+
+# Drafts live outside the repository until they are deliberately published.
+blog/
