@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>PluginHost.Host</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Contracts/PluginHost.Contracts.csproj" />
+    <ProjectReference Include="../../../src/NativeEndpoints/NativeEndpoints.csproj" />
+
+    <!--
+      Built before the host, but deliberately not referenced: referencing it would load the plugin
+      into the default context, where it can never be unloaded. The target below drops its output
+      into a plugins folder the host scans at runtime.
+    -->
+    <ProjectReference Include="../Plugin/PluginHost.Plugin.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      OutputItemType="PluginBuildOutput" />
+  </ItemGroup>
+
+  <Target Name="StagePlugin" AfterTargets="Build">
+    <Copy SourceFiles="@(PluginBuildOutput)" DestinationFolder="$(OutDir)plugins" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

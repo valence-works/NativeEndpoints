@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The collectible half. Nothing references this project for its output: the host discovers the
+    built assembly on disk and loads it into a collectible AssemblyLoadContext at runtime.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Contracts/PluginHost.Contracts.csproj" Private="false" ExcludeAssets="runtime" />
+    <ProjectReference Include="../../../src/NativeEndpoints/NativeEndpoints.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

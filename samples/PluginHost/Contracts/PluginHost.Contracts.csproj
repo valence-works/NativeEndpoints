@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Shared, stable, loaded once in the default context. Both the host and every plugin reference it.
+    This is the assembly boundary that makes the whole sample work: contract types reachable from
+    endpoint metadata are retained by API Explorer for the host's lifetime, so they must not live in
+    the assembly you intend to unload.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

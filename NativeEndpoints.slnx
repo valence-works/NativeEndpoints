@@ -5,6 +5,9 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Minimal/Minimal.csproj" />
+    <Project Path="samples/PluginHost/Contracts/PluginHost.Contracts.csproj" />
+    <Project Path="samples/PluginHost/Plugin/PluginHost.Plugin.csproj" />
+    <Project Path="samples/PluginHost/Host/PluginHost.Host.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/NativeEndpoints.Tests/NativeEndpoints.Tests.csproj" />
