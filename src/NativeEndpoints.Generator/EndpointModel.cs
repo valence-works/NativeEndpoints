@@ -21,7 +21,11 @@ internal sealed record EndpointModel(
     int PublicConstructorCount,
     string? ContractName,
     string Operation,
-    bool Generatable);
+    bool Generatable,
+    ImmutableArray<ConfigureRead> ConfigureReads);
+
+/// <summary>A piece of instance state that Configure reads, and where it reads it.</summary>
+internal sealed record ConfigureRead(string Member, Location Location);
 
 /// <summary>One contract member, and everything the emitter needs to read it without reflection.</summary>
 internal sealed record ContractParameter(

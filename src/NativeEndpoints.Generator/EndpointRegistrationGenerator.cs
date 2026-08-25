@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
@@ -95,7 +96,57 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             contract.ConstructorCount,
             contract.Name,
             EndpointSymbols.Operation(type),
-            generatable);
+            generatable,
+            ConfigureReads(context, type));
+    }
+
+    /// <summary>
+    /// Instance state read inside a Configure override.
+    /// </summary>
+    /// <remarks>
+    /// Configure runs at map time on an uninitialized instance, before any constructor. Reading a
+    /// constructor-injected dependency there observes null, and the resulting NullReferenceException
+    /// surfaces during startup with no obvious cause. Only a doc comment guarded this before.
+    /// </remarks>
+    private static ImmutableArray<ConfigureRead> ConfigureReads(GeneratorSyntaxContext context, INamedTypeSymbol type)
+    {
+        var declaration = (ClassDeclarationSyntax)context.Node;
+        var configure = declaration.Members
+            .OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault(method => method.Identifier.ValueText == "Configure");
+
+        if (configure is null)
+            return ImmutableArray<ConfigureRead>.Empty;
+
+        var reads = ImmutableArray.CreateBuilder<ConfigureRead>();
+        var seen = new HashSet<string>();
+
+        foreach (var identifier in configure.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            var symbol = context.SemanticModel.GetSymbolInfo(identifier).Symbol;
+            var reads_state = symbol switch
+            {
+                // A primary constructor parameter captured into the class.
+                IParameterSymbol parameter =>
+                    parameter.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor &&
+                    SymbolEqualityComparer.Default.Equals(constructor.ContainingType, type),
+
+                IFieldSymbol { IsStatic: false, IsConst: false } field =>
+                    SymbolEqualityComparer.Default.Equals(field.ContainingType, type),
+
+                // HttpContext is set per request, so reading it here is the same mistake.
+                IPropertySymbol { IsStatic: false } property =>
+                    SymbolEqualityComparer.Default.Equals(property.ContainingType, type) ||
+                    property.Name == "HttpContext",
+
+                _ => false
+            };
+
+            if (reads_state && seen.Add(symbol!.Name))
+                reads.Add(new ConfigureRead(symbol.Name, identifier.GetLocation()));
+        }
+
+        return reads.ToImmutable();
     }
 
     /// <summary>Whether the emitter can write a conversion for this parameter.</summary>
@@ -220,6 +271,12 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
     {
         if (!model.HasRoute && model.Shape is not EndpointShape.Unsupported)
             production.ReportDiagnostic(Diagnostic.Create(Diagnostics.MissingRoute, Location.None, model.DisplayName));
+
+        foreach (var read in model.ConfigureReads)
+        {
+            production.ReportDiagnostic(Diagnostic.Create(
+                Diagnostics.ConfigureTouchesState, read.Location, model.DisplayName, read.Member));
+        }
 
         if (model.ContractName is not null && model.PublicConstructorCount != 1)
         {
