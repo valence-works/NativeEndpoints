@@ -9,6 +9,7 @@
   <PropertyGroup>
     <Description>OpenAPI integration for NativeEndpoints: documents the route, query, header, and claim parameters an endpoint binds.</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageTags>aspnetcore;minimal-api;endpoints;openapi;swagger</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

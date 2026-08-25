@@ -1,0 +1,70 @@
+name: release
+
+# Publishing to nuget.org is effectively permanent: a package can be unlisted but never deleted, and
+# a version number can never be reused. So this runs only on an explicit tag, never on a push to
+# main, and it verifies before it publishes.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, without a leading v (for example 1.0.0-preview.1)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Configure required reviewers on this environment to gate the publish behind an approval.
+    environment: nuget
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        run: dotnet build NativeEndpoints.slnx --configuration Release
+
+      - name: Test
+        run: dotnet test NativeEndpoints.slnx --configuration Release --no-build
+
+      # The AOT claim ships with the package, so it is verified before the package does.
+      - name: Verify native AOT
+        run: dotnet publish samples/Aot/Aot.csproj --configuration Release -r linux-x64 --output artifacts/aot
+
+      - name: Pack
+        run: >
+          dotnet pack NativeEndpoints.slnx --configuration Release --no-build
+          --output artifacts -p:Version=${{ steps.version.outputs.value }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.version.outputs.value }}
+          path: artifacts/*.*nupkg
+
+      - name: Publish to nuget.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::error::NUGET_API_KEY is not set. Add it as a repository secret before releasing."
+            exit 1
+          fi
+          dotnet nuget push "artifacts/*.nupkg" \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate

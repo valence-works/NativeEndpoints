@@ -8,6 +8,7 @@
   <PropertyGroup>
     <Description>Test kit for ASP.NET Core endpoint assemblies: collectible load-and-unload evidence, and before/after HTTP and OpenAPI compatibility comparison.</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageTags>aspnetcore;endpoints;testing;trimming;collectible;assemblyloadcontext</PackageTags>
 
     <!--
       CS1591 is an error in the core library, where the public API is the product. Here it is

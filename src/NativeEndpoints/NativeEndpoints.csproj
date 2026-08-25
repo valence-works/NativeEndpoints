@@ -7,6 +7,7 @@
   <PropertyGroup>
     <Description>A structured programming model for ASP.NET Core Minimal APIs. One class per endpoint, ordinary ASP.NET Core underneath.</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageTags>aspnetcore;minimal-api;endpoints;vertical-slice;openapi;aot;source-generator</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
