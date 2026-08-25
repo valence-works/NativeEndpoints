@@ -186,6 +186,8 @@ public sealed class EndpointGroup
             Method = method,
             Pattern = pattern,
             RequestType = declaresRequest ? typeof(TMessage) : null,
+            ContractType = typeof(TMessage),
+            ReadsBody = effectiveBodyMode is not EndpointBodyMode.None,
             ResponseType = responseType,
             Accepts = accepts,
             SuccessStatus = successStatus,

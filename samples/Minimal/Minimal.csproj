@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/NativeEndpoints/NativeEndpoints.csproj" />
+    <ProjectReference Include="../../src/NativeEndpoints.OpenApi/NativeEndpoints.OpenApi.csproj" />
   </ItemGroup>
 
 </Project>

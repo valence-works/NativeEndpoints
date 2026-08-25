@@ -52,6 +52,18 @@ app.Run();
 dotnet add package NativeEndpoints
 ```
 
+Generating an OpenAPI document? Add the integration too, so the route, query, and header parameters
+your endpoints bind appear in it:
+
+```bash
+dotnet add package NativeEndpoints.OpenApi
+```
+
+```csharp
+builder.Services.AddOpenApi();
+builder.Services.AddNativeEndpointsOpenApi();
+```
+
 ## Why
 
 Minimal APIs are a good runtime and an awkward organizing principle. Past a few dozen routes you are

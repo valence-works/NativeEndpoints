@@ -25,6 +25,18 @@ public sealed record EndpointOperationContext
     /// <summary>The request contract, when the operation documents one.</summary>
     public Type? RequestType { get; init; }
 
+    /// <summary>
+    /// The contract the operation binds, whether or not it is documented as a request body.
+    /// </summary>
+    /// <remarks>
+    /// A GET binds a contract from the route and query without declaring a request body, so
+    /// <see cref="RequestType"/> is null while this is not. Parameter descriptions come from here.
+    /// </remarks>
+    public Type? ContractType { get; init; }
+
+    /// <summary>Whether the operation reads a JSON body, so body members are not repeated as parameters.</summary>
+    public bool ReadsBody { get; init; }
+
     /// <summary>The success response body type. Null means no body.</summary>
     public Type? ResponseType { get; init; }
 

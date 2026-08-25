@@ -64,6 +64,15 @@ public static class EndpointConventionBuilderExtensions
         if (context.RequestType is not null)
             builder.AddEndpointMetadata(new AcceptsMetadata(context.Accepts ?? [JsonContentType], context.RequestType, false));
 
+        // Publishing a bare RequestDelegate leaves API Explorer nothing to infer parameters from, so
+        // state them explicitly from the contract's shape. Plain metadata: whoever generates the
+        // document decides what to do with it.
+        foreach (var parameter in EndpointParameterDescriber.Describe(
+                     context.ContractType, context.Pattern, context.ReadsBody))
+        {
+            builder.AddEndpointMetadata(parameter);
+        }
+
         DocumentAuthResponses(builder, context.DocumentAuthResponses);
         builder.WithApiExplorerDescription().RequireStableEndpointMetadata();
     }

@@ -31,12 +31,12 @@ The whole composition root is one line in `Program.cs`. Operation identifiers ar
 
 Samples exist to find the sharp edges before users do. These are real, and none of them are hidden.
 
-**Route and query parameters are not in the OpenAPI document.** Handlers are published as bare
+**Route and query parameters needed solving separately.** Handlers are published as bare
 `RequestDelegate` so that API Explorer never retains a handler `MethodInfo` — that is what makes
-endpoint assemblies collectible. The cost is that API Explorer has nothing to infer parameters from,
-so `GET /api/notes/{noteId}` documents no `noteId`. Request and response *schemas* are documented
-correctly; parameters are not. Fixing this needs an OpenAPI operation transformer, and it is the most
-significant known gap in the library today.
+endpoint assemblies collectible. The cost is that API Explorer has nothing to infer parameters from.
+The library states them itself instead, and `NativeEndpoints.OpenApi` turns them into document
+parameters; this sample references it, which is why `GET /api/notes/{noteId}` documents `noteId`.
+Without that package the schemas are still correct and the parameters are simply absent.
 
 **A handler-decided status has to be declared.** `ApiEndpointWithResult` lets the handler choose the
 status at runtime, which means the framework cannot know what to document. `Create` sets
