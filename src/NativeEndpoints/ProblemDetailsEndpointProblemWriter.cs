@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.WebUtilities;
 
 namespace NativeEndpoints;
@@ -11,6 +12,10 @@ namespace NativeEndpoints;
 public sealed class ProblemDetailsEndpointProblemWriter(IProblemDetailsService problemDetails) : IEndpointProblemWriter
 {
     /// <summary>Writes the problem as an RFC 9457 document, keyed errors becoming extensions.</summary>
+    [UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "The fallback write is only reached when the host's IProblemDetailsService declines, and ProblemDetails is a framework type the host already serializes.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050",
+        Justification = "The fallback write is only reached when the host's IProblemDetailsService declines, and ProblemDetails is a framework type the host already serializes.")]
     public async Task WriteAsync(HttpContext context, EndpointProblem problem)
     {
         ArgumentNullException.ThrowIfNull(context);

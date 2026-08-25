@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using System.Globalization;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -75,8 +76,25 @@ public readonly record struct EndpointBindingResult<T>(T? Value, EndpointBinding
 /// body so a route-addressed resource identifier cannot be contradicted by the payload.
 /// </para>
 /// </remarks>
+[UnconditionalSuppressMessage("Trimming", "IL2067",
+    Justification = SuppressionReason)]
+[UnconditionalSuppressMessage("Trimming", "IL2070",
+    Justification = SuppressionReason)]
+[UnconditionalSuppressMessage("Trimming", "IL2075",
+    Justification = SuppressionReason)]
+[UnconditionalSuppressMessage("Trimming", "IL2087",
+    Justification = SuppressionReason)]
+[UnconditionalSuppressMessage("Trimming", "IL2090",
+    Justification = SuppressionReason)]
+[UnconditionalSuppressMessage("AOT", "IL3050",
+    Justification = SuppressionReason)]
 public static class EndpointRequestBinder
 {
+    private const string SuppressionReason =
+        "This is the reflective binder. Its public entry point is annotated RequiresUnreferencedCode " +
+        "and RequiresDynamicCode, so a trimmed or AOT build is told at the boundary rather than here. " +
+        "Projects running the source generator bind through emitted code and never reach these paths.";
+
     // Weak-keyed on purpose. Contract types ship in each domain's collectible .Api assembly, so a
     // strong static reference here would root that assembly's load context for host lifetime.
     // ConditionalWeakTable uses ephemerons, so ConstructorInfo referencing its own declaring Type
@@ -84,6 +102,71 @@ public static class EndpointRequestBinder
     private static readonly ConditionalWeakTable<Type, ConstructorInfo> Constructors = new();
 
     /// <summary>Binds a request contract from the route values, the query string, and the body.</summary>
+    /// <summary>
+    /// Reads and deserializes the request body, applying the body mode's media-type rules.
+    /// </summary>
+    /// <remarks>
+    /// Public so a generated binder can reuse it rather than reimplementing the rules. The
+    /// media-type behaviour is subtle enough that two implementations of it would drift.
+    /// </remarks>
+    /// <returns>The deserialized body, or a failure describing why it could not be read.</returns>
+    public static async ValueTask<(bool Succeeded, T? Body, EndpointBindingResult<T> Failure)> ReadBodyAsync<T>(
+        HttpContext context,
+        JsonSerializerOptions jsonOptions,
+        EndpointBodyMode bodyMode)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(jsonOptions);
+
+        if (bodyMode is EndpointBodyMode.None)
+            return (true, default, default);
+
+        var declared = !string.IsNullOrWhiteSpace(context.Request.ContentType);
+        var isJson = declared && IsJsonContentType(context.Request.ContentType);
+        var unsupported = bodyMode switch
+        {
+            EndpointBodyMode.Optional => false,
+            EndpointBodyMode.RequiredWithContentType or EndpointBodyMode.OptionalWithContentType => !isJson,
+            _ => declared && !isJson
+        };
+
+        if (unsupported)
+        {
+            return (false, default, new(default, EndpointBindingFailure.UnsupportedMediaType,
+                "The request content type must be application/json."));
+        }
+
+        if (bodyMode is EndpointBodyMode.Optional or EndpointBodyMode.OptionalWithContentType && !isJson)
+            return (true, default, default);
+
+        T? body;
+        try
+        {
+            // The JsonTypeInfo overload is the AOT-safe one: with a source-generated context the
+            // resolver already knows this type and nothing is discovered at runtime.
+            var typeInfo = jsonOptions.GetTypeInfo(typeof(T));
+            body = (T?)await JsonSerializer.DeserializeAsync(context.Request.Body, typeInfo, context.RequestAborted);
+        }
+        catch (JsonException exception)
+        {
+            var message = exception.Message.Replace(" Path: $ |", "", StringComparison.Ordinal);
+            return (false, default, new(default, EndpointBindingFailure.MalformedBody, message));
+        }
+
+        if (body is null && bodyMode is EndpointBodyMode.Required or EndpointBodyMode.RequiredWithContentType)
+            return (false, default, new(default, EndpointBindingFailure.MissingBody, "A request body is required."));
+
+        return (true, body, default);
+    }
+
+    /// <summary>Binds a request contract from the route values, the query string, and the body.</summary>
+    /// <remarks>
+    /// Reflective, and annotated so a trimmed or AOT build says so rather than failing at runtime.
+    /// The source generator emits a binder per contract that needs none of this; a project that runs
+    /// the generator never reaches here.
+    /// </remarks>
+    [RequiresUnreferencedCode("Binds contracts by reflecting over their constructors and properties. Use the source generator, which emits a binder per contract.")]
+    [RequiresDynamicCode("Constructs collection types at runtime. Use the source generator, which emits a binder per contract.")]
     public static async ValueTask<EndpointBindingResult<T>> BindAsync<T>(
         HttpContext context,
         JsonSerializerOptions jsonOptions,
@@ -93,46 +176,13 @@ public static class EndpointRequestBinder
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(jsonOptions);
 
-        object? body = null;
-        if (bodyMode is not EndpointBodyMode.None)
-        {
-            var declared = !string.IsNullOrWhiteSpace(context.Request.ContentType);
-            var isJson = declared && IsJsonContentType(context.Request.ContentType);
-            var unsupported = bodyMode switch
-            {
-                // An optional body simply is not there when it is not JSON.
-                EndpointBodyMode.Optional => false,
-                EndpointBodyMode.RequiredWithContentType or EndpointBodyMode.OptionalWithContentType => !isJson,
-                _ => declared && !isJson
-            };
+        // Body reading is shared with generated binders, so the media-type rules have exactly one
+        // implementation and the two paths cannot drift apart.
+        var read = await ReadBodyAsync<T>(context, jsonOptions, bodyMode);
+        if (!read.Succeeded)
+            return read.Failure;
 
-            if (unsupported)
-            {
-                return new(default, EndpointBindingFailure.UnsupportedMediaType,
-                    "The request content type must be application/json.");
-            }
-
-            if (bodyMode is EndpointBodyMode.Optional && !isJson)
-            {
-                // Falls through to route and query binding.
-            }
-            else
-            {
-                try
-                {
-                    body = await JsonSerializer.DeserializeAsync(
-                        context.Request.Body, typeof(T), jsonOptions, context.RequestAborted);
-                }
-                catch (JsonException exception)
-                {
-                    var message = exception.Message.Replace(" Path: $ |", "", StringComparison.Ordinal);
-                    return new(default, EndpointBindingFailure.MalformedBody, message);
-                }
-
-                if (body is null && bodyMode is EndpointBodyMode.Required or EndpointBodyMode.RequiredWithContentType)
-                    return new(default, EndpointBindingFailure.MissingBody, "A request body is required.");
-            }
-        }
+        object? body = read.Body;
 
         var constructor = Constructors.GetValue(typeof(T), SelectConstructor);
         var parameters = constructor.GetParameters();

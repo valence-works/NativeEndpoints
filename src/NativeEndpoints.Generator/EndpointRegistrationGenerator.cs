@@ -67,6 +67,18 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
 
         var (shape, request, response) = EndpointSymbols.Shape(type);
         var contract = ContractOf(type);
+        var pattern = EndpointSymbols.RoutePattern(type);
+        var routeKeys = RouteKeys(pattern);
+
+        // Generatable only when everything is statically knowable: one constructor on both the
+        // endpoint and its contract, and a conversion for every member the binder must produce from
+        // a string. Anything else falls back to the reflective path, which handles it correctly.
+        var generatable =
+            shape is not EndpointShape.Unsupported &&
+            pattern is not null &&
+            contract.ConstructorCount == 1 &&
+            EndpointSymbols.HasSingleConstructor(type) &&
+            contract.Parameters.All(parameter => IsEmittable(parameter, routeKeys));
 
         return new EndpointModel(
             type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
@@ -76,9 +88,43 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             shape,
             EndpointSymbols.HasRouteAttribute(type),
             EndpointSymbols.HttpMethod(type),
+            pattern,
             contract.Parameters,
+            EndpointSymbols.Dependencies(type),
+            routeKeys,
             contract.ConstructorCount,
-            contract.Name);
+            contract.Name,
+            EndpointSymbols.Operation(type),
+            generatable);
+    }
+
+    /// <summary>Whether the emitter can write a conversion for this parameter.</summary>
+    private static bool IsEmittable(ContractParameter parameter, ImmutableArray<string> routeKeys)
+    {
+        // Collections need an element conversion; scalars need their own.
+        if (parameter.IsArray || parameter.IsList)
+            return !string.IsNullOrEmpty(parameter.ElementConverter);
+
+        if (!string.IsNullOrEmpty(parameter.Converter))
+            return true;
+
+        // A member with no conversion is fine when it comes from the body, where JSON handles it.
+        return parameter.DeclaredSource is null && !routeKeys.Contains(parameter.Name);
+    }
+
+    private static ImmutableArray<string> RouteKeys(string? pattern)
+    {
+        if (pattern is null)
+            return ImmutableArray<string>.Empty;
+
+        var keys = ImmutableArray.CreateBuilder<string>();
+        foreach (System.Text.RegularExpressions.Match match in
+                 System.Text.RegularExpressions.Regex.Matches(pattern, @"\{\*{0,2}([A-Za-z_][A-Za-z0-9_]*)[^}]*\}"))
+        {
+            keys.Add(match.Groups[1].Value);
+        }
+
+        return keys.ToImmutable();
     }
 
     /// <summary>The request contract's single-constructor shape, as far as the compiler can see it.</summary>
@@ -105,18 +151,66 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
                 .ToArray();
 
             var parameters = constructors.Length == 1
-                ? constructors[0].Parameters
-                    .Select(parameter => new ContractParameter(
-                        parameter.Name,
-                        parameter.Type.ToDisplayString(),
-                        EndpointSymbols.IsBindable(parameter.Type)))
-                    .ToImmutableArray()
+                ? constructors[0].Parameters.Select(parameter => Describe(parameter, contract)).ToImmutableArray()
                 : ImmutableArray<ContractParameter>.Empty;
 
             return (parameters, constructors.Length, contract.ToDisplayString());
         }
 
         return (ImmutableArray<ContractParameter>.Empty, 1, null);
+    }
+
+    /// <summary>Reduces one contract parameter to the calls the emitter will write for it.</summary>
+    private static ContractParameter Describe(IParameterSymbol parameter, INamedTypeSymbol contract)
+    {
+        // The attribute may sit on the parameter or, for a positional record, on the generated
+        // property. Both spellings are idiomatic, so both are read.
+        var attribute = parameter.GetAttributes()
+                            .FirstOrDefault(item => IsBindFrom(item.AttributeClass))
+                        ?? contract.GetMembers(parameter.Name)
+                            .OfType<IPropertySymbol>()
+                            .SelectMany(property => property.GetAttributes())
+                            .FirstOrDefault(item => IsBindFrom(item.AttributeClass));
+
+        var source = attribute?.AttributeClass?.ToDisplayString() switch
+        {
+            "NativeEndpoints.FromRouteAttribute" => "Route",
+            "NativeEndpoints.FromQueryAttribute" => "Query",
+            "NativeEndpoints.FromHeaderAttribute" => "Header",
+            "NativeEndpoints.FromClaimAttribute" => "Claim",
+            _ => null
+        };
+
+        var key = attribute?.ConstructorArguments.Length == 1
+            ? attribute.ConstructorArguments[0].Value as string
+            : null;
+
+        var (element, isArray, isList) = EndpointSymbols.Collection(parameter.Type);
+        var elementConverter = element is null ? null : EndpointSymbols.Converter(element);
+
+        return new ContractParameter(
+            parameter.Name,
+            parameter.Type.ToDisplayString(),
+            EndpointSymbols.IsBindable(parameter.Type),
+            EndpointSymbols.Converter(parameter.Type) ?? string.Empty,
+            elementConverter,
+            element?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+            isArray,
+            isList,
+            source,
+            key,
+            parameter.Type is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated });
+    }
+
+    private static bool IsBindFrom(INamedTypeSymbol? attributeClass)
+    {
+        for (var current = attributeClass; current is not null; current = current.BaseType)
+        {
+            if (current.ToDisplayString() == "NativeEndpoints.BindFromAttribute")
+                return true;
+        }
+
+        return false;
     }
 
     private static void Report(
@@ -150,19 +244,28 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
     private static Microsoft.CodeAnalysis.Text.SourceText SourceText(string assemblyName, ImmutableArray<EndpointModel> endpoints)
     {
         var identifier = new string(assemblyName.Where(char.IsLetterOrDigit).ToArray());
+        var generated = endpoints.Where(model => model.Generatable).ToImmutableArray();
+        var reflective = endpoints.Where(model => !model.Generatable).ToImmutableArray();
+
         var builder = new StringBuilder();
         builder.AppendLine("// <auto-generated/>");
         builder.AppendLine("#nullable enable");
+        builder.AppendLine("#pragma warning disable CS1591");
         builder.AppendLine();
         builder.AppendLine("namespace NativeEndpoints.Generated;");
         builder.AppendLine();
-        builder.AppendLine("/// <summary>Explicit registrations for every endpoint class in this assembly.</summary>");
+        builder.AppendLine("/// <summary>Registrations for every endpoint class in this assembly.</summary>");
         builder.AppendLine("/// <remarks>");
-        builder.AppendLine("/// Generated. Calling this instead of MapEndpointsFrom removes the assembly scan, so nothing");
-        builder.AppendLine("/// here depends on reflection over types the trimmer cannot see.");
+        builder.AppendLine($"/// Generated. {generated.Length} endpoint(s) bind and activate through emitted code with no");
+        builder.AppendLine($"/// reflection; {reflective.Length} fall back to the reflective mapper because their shape is not");
+        builder.AppendLine("/// statically resolvable. Both produce identical endpoints.");
         builder.AppendLine("/// </remarks>");
         builder.AppendLine($"public static class {identifier}Endpoints");
         builder.AppendLine("{");
+
+        for (var index = 0; index < generated.Length; index++)
+            Emitter.Endpoint(builder, generated[index], index);
+
         builder.AppendLine($"    /// <summary>Maps all {endpoints.Length} endpoint class(es) declared in this assembly.</summary>");
         builder.AppendLine("    public static global::NativeEndpoints.EndpointGroup Map(");
         builder.AppendLine("        this global::NativeEndpoints.EndpointGroup group,");
@@ -171,13 +274,63 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
         builder.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(group);");
         builder.AppendLine();
 
-        foreach (var endpoint in endpoints)
-            builder.AppendLine($"        group.MapEndpoint<{endpoint.QualifiedName}>(routePrefix);");
+        for (var index = 0; index < generated.Length; index++)
+            Emitter.Map(builder, generated[index], index);
 
-        builder.AppendLine();
+        foreach (var endpoint in reflective)
+        {
+            builder.AppendLine($"        // {endpoint.DisplayName}: mapped reflectively; its shape is not statically resolvable.");
+            builder.AppendLine($"        group.MapEndpoint<{endpoint.QualifiedName}>(routePrefix);");
+            builder.AppendLine();
+        }
+
         builder.AppendLine("        return group;");
         builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine(Helpers);
         builder.AppendLine("}");
         return Microsoft.CodeAnalysis.Text.SourceText.From(builder.ToString(), Encoding.UTF8);
     }
+
+    /// <summary>
+    /// Shared by every generated mapping: run Configure, then apply what it and the attributes asked
+    /// for. Configure is arbitrary code, so it has to run rather than be read at compile time.
+    /// </summary>
+    private const string Helpers = """
+        private static global::NativeEndpoints.ApiEndpointOptions Describe<
+            [global::System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+                global::System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+                global::System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.NonPublicConstructors)] TEndpoint>(
+            string method, string route, string operation, string? routePrefix)
+            where TEndpoint : global::NativeEndpoints.ApiEndpointBase
+        {
+            var options = new global::NativeEndpoints.ApiEndpointOptions
+            {
+                Method = method,
+                Route = string.IsNullOrEmpty(routePrefix) ? route : routePrefix!.TrimEnd('/') + "/" + route.TrimStart('/'),
+                Operation = operation
+            };
+
+            // Configure runs at map time on an uninitialized instance, exactly as the reflective
+            // mapper runs it. It is arbitrary code, so it cannot be evaluated at compile time.
+            var describer = (global::NativeEndpoints.ApiEndpointBase)global::System.Runtime.CompilerServices.RuntimeHelpers
+                .GetUninitializedObject(typeof(TEndpoint));
+            describer.Configure(options);
+            return options;
+        }
+
+        private static void Apply<TEndpoint>(
+            global::Microsoft.AspNetCore.Builder.IEndpointConventionBuilder builder,
+            global::NativeEndpoints.ApiEndpointOptions options)
+        {
+            foreach (var attribute in typeof(TEndpoint).GetCustomAttributes(false))
+            {
+                if (attribute is global::NativeEndpoints.IEndpointConventionAttribute convention)
+                    convention.Apply(builder);
+            }
+
+            foreach (var convention in options.Conventions)
+                convention(builder);
+        }
+        """;
 }

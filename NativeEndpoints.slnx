@@ -6,6 +6,7 @@
     <Project Path="src/NativeEndpoints.Generator/NativeEndpoints.Generator.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Aot/Aot.csproj" />
     <Project Path="samples/Minimal/Minimal.csproj" />
     <Project Path="samples/PluginHost/Contracts/PluginHost.Contracts.csproj" />
     <Project Path="samples/PluginHost/Plugin/PluginHost.Plugin.csproj" />

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using EndpointRouteAttribute = NativeEndpoints.EndpointRouteAttribute;
@@ -18,10 +19,22 @@ namespace NativeEndpoints;
 /// </remarks>
 public static class ApiEndpointMapper
 {
+    private const string ReflectiveMapping =
+        "Scans assemblies, closes generic methods at runtime, and activates endpoints reflectively. " +
+        "Use the source generator's Map(), which emits an explicit registration instead.";
+
     /// <summary>Maps every concrete <see cref="ApiEndpointBase"/> in the assembly onto the group.</summary>
+    /// <remarks>
+    /// Reflective: it scans the assembly, closes generic methods at runtime, and activates endpoints
+    /// through the container. Annotated so a trimmed or native AOT build says so at the call site
+    /// rather than failing once deployed. The source generator emits an equivalent registration that
+    /// needs none of this.
+    /// </remarks>
     /// <param name="api">The group the endpoints are mapped into.</param>
     /// <param name="assembly">The assembly to scan. Scanning is local to this call and retains nothing.</param>
     /// <param name="routePrefix">Prefix applied to attribute-declared routes, so attributes stay literal.</param>
+    [RequiresUnreferencedCode(ReflectiveMapping)]
+    [RequiresDynamicCode(ReflectiveMapping)]
     public static EndpointGroup MapEndpointsFrom(this EndpointGroup api, Assembly assembly, string? routePrefix = null)
     {
         ArgumentNullException.ThrowIfNull(api);
@@ -38,6 +51,8 @@ public static class ApiEndpointMapper
     }
 
     /// <summary>Maps one endpoint class explicitly.</summary>
+    [RequiresUnreferencedCode(ReflectiveMapping)]
+    [RequiresDynamicCode(ReflectiveMapping)]
     public static IEndpointConventionBuilder MapEndpoint<TEndpoint>(this EndpointGroup api, string? routePrefix = null)
         where TEndpoint : ApiEndpointBase
     {

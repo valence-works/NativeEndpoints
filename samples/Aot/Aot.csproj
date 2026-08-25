@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Published with native AOT in CI, with IL warnings treated as errors. The claim that this library
+    is AOT-compatible is only worth making if something checks it on every push.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Aot</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+
+    <!--
+      Trim and AOT analysis warnings fail this project's publish. A reflective path creeping back
+      into the generated flow then breaks the build rather than the release, and the README's AOT
+      claim stays true by construction rather than by memory.
+    -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors>$(WarningsAsErrors);IL2026;IL2067;IL2070;IL2072;IL2075;IL2087;IL2090;IL3050</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/NativeEndpoints/NativeEndpoints.csproj" />
+    <ProjectReference Include="../../src/NativeEndpoints.Generator/NativeEndpoints.Generator.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="Analyzer" />
+  </ItemGroup>
+
+</Project>

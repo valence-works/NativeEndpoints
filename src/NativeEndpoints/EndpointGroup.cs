@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -91,6 +92,12 @@ public sealed class EndpointGroup
             async context => await WriteJsonAsync(context, await handler(context, context.RequestAborted), successStatus));
 
     /// <summary>Writes a value using the owner's source-generated serializer metadata.</summary>
+    [UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "The options path is only reached when no JsonSerializerContext was supplied. " +
+                        "A trimmed or AOT host supplies one, which takes the JsonTypeInfo path above.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050",
+        Justification = "The options path is only reached when no JsonSerializerContext was supplied. " +
+                        "A trimmed or AOT host supplies one, which takes the JsonTypeInfo path above.")]
     public Task WriteJsonAsync<TValue>(HttpContext context, TValue value, int statusCode = StatusCodes.Status200OK)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -107,6 +114,10 @@ public sealed class EndpointGroup
     /// The low-level operation pipeline: bind, dispatch, translate failures, and attach the module
     /// operation metadata. The typed Map methods and external bridges compose on top of this.
     /// </summary>
+    [UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "The reflective binder is only called when no generated binder was supplied. A trimmed or AOT build runs the generator, which supplies one.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050",
+        Justification = "The reflective binder is only called when no generated binder was supplied. A trimmed or AOT build runs the generator, which supplies one.")]
     public IEndpointConventionBuilder MapOperation<TMessage>(
         string method,
         string pattern,
@@ -117,7 +128,8 @@ public sealed class EndpointGroup
         int successStatus,
         int? documentedStatus,
         Func<HttpContext, TMessage, CancellationToken, Task> dispatch,
-        bool? documentAuthResponses = null)
+        bool? documentAuthResponses = null,
+        EndpointBinder<TMessage>? binder = null)
     {
         var effectiveBodyMode = bodyMode ?? DefaultBodyMode(method);
         var jsonOptions = _jsonOptions;
@@ -128,7 +140,9 @@ public sealed class EndpointGroup
             EndpointBindingResult<TMessage> binding;
             try
             {
-                binding = await EndpointRequestBinder.BindAsync<TMessage>(context, jsonOptions, effectiveBodyMode, valueBinders);
+                binding = binder is null
+                    ? await EndpointRequestBinder.BindAsync<TMessage>(context, jsonOptions, effectiveBodyMode, valueBinders)
+                    : await binder(context, jsonOptions, effectiveBodyMode, valueBinders);
             }
             catch (OperationCanceledException)
             {
@@ -195,6 +209,93 @@ public sealed class EndpointGroup
             DocumentAuthResponses = documentAuthResponses
         });
         return builder;
+    }
+
+    /// <summary>
+    /// Maps an endpoint whose binding and activation were generated at build time.
+    /// </summary>
+    /// <remarks>
+    /// The reflection-free path. <paramref name="bind"/> and <paramref name="activate"/> come from
+    /// the source generator, so nothing here resolves a constructor, makes a generic method, or asks
+    /// a container to build a type it cannot see. The reflective mapper produces identical endpoints
+    /// by a slower route; the conformance suite asserts they agree.
+    /// </remarks>
+    public IEndpointConventionBuilder MapGenerated<TEndpoint, TRequest, TResponse>(
+        ApiEndpointOptions options,
+        EndpointBinder<TRequest> bind,
+        Func<IServiceProvider, TEndpoint> activate,
+        Func<TEndpoint, TRequest, CancellationToken, Task<TResponse>> handle)
+        where TEndpoint : ApiEndpointBase
+        where TResponse : notnull
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(bind);
+        ArgumentNullException.ThrowIfNull(activate);
+
+        return MapOperation<TRequest>(
+            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
+            typeof(TResponse), options.SuccessStatus, options.DocumentedStatus,
+            async (context, request, cancellationToken) =>
+            {
+                var endpoint = activate(context.RequestServices);
+                endpoint.HttpContext = context;
+                await WriteJsonAsync(context, await handle(endpoint, request, cancellationToken), options.SuccessStatus);
+            },
+            options.DocumentAuthResponses,
+            bind);
+    }
+
+    /// <summary>Maps a generated endpoint that returns no content.</summary>
+    public IEndpointConventionBuilder MapGeneratedNoContent<TEndpoint, TRequest>(
+        ApiEndpointOptions options,
+        EndpointBinder<TRequest> bind,
+        Func<IServiceProvider, TEndpoint> activate,
+        Func<TEndpoint, TRequest, CancellationToken, Task> handle)
+        where TEndpoint : ApiEndpointBase
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(bind);
+        ArgumentNullException.ThrowIfNull(activate);
+
+        return MapOperation<TRequest>(
+            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
+            null, StatusCodes.Status204NoContent, options.DocumentedStatus,
+            async (context, request, cancellationToken) =>
+            {
+                var endpoint = activate(context.RequestServices);
+                endpoint.HttpContext = context;
+                await handle(endpoint, request, cancellationToken);
+                context.Response.StatusCode = StatusCodes.Status204NoContent;
+            },
+            options.DocumentAuthResponses,
+            bind);
+    }
+
+    /// <summary>Maps a generated endpoint whose status travels with its result.</summary>
+    public IEndpointConventionBuilder MapGeneratedResult<TEndpoint, TRequest, TResponse>(
+        ApiEndpointOptions options,
+        EndpointBinder<TRequest> bind,
+        Func<IServiceProvider, TEndpoint> activate,
+        Func<TEndpoint, TRequest, CancellationToken, Task<EndpointResult<TResponse>>> handle)
+        where TEndpoint : ApiEndpointBase
+        where TResponse : notnull
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(bind);
+        ArgumentNullException.ThrowIfNull(activate);
+
+        return MapOperation<TRequest>(
+            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
+            typeof(TResponse), options.SuccessStatus, options.DocumentedStatus,
+            async (context, request, cancellationToken) =>
+            {
+                var endpoint = activate(context.RequestServices);
+                endpoint.HttpContext = context;
+                var result = await handle(endpoint, request, cancellationToken);
+                await WriteJsonAsync(context, result.Response, result.StatusCode);
+            },
+            options.DocumentAuthResponses,
+            bind);
     }
 
     /// <summary>Maps an options-described operation returning a body. Used by the endpoint-class mapper.</summary>

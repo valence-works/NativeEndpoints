@@ -37,6 +37,15 @@ jobs:
       - name: Test
         run: dotnet test NativeEndpoints.slnx --configuration Release --no-build --verbosity normal
 
+      # The AOT claim is only worth making if something checks it. IL warnings are errors here, so a
+      # reflective path creeping back into the generated flow fails the build rather than the release.
+      - name: Verify native AOT
+        run: >
+          dotnet publish samples/Aot/Aot.csproj
+          --configuration Release
+          -r linux-x64
+          --output artifacts/aot
+
       # Prereleases are numbered from the run, so every green main build is installable from
       # GitHub Packages. nuget.org opens at 1.0.0-preview.1, on the gates in the README.
       - name: Pack

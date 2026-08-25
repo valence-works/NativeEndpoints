@@ -256,6 +256,9 @@ other respect. It is the reason this library exists.
 - **Older target frameworks.** `net10.0` only. .NET 8 leaves support in November 2026 and a new
   library targeting it would ship dead code.
 
+Native AOT **is** supported, through the source generator. See
+[`samples/Aot`](samples/Aot) and the [source generator](docs/Source-Generator.md) page.
+
 ## Documentation
 
 Full documentation lives in the [wiki](https://github.com/valence-works/NativeEndpoints/wiki),

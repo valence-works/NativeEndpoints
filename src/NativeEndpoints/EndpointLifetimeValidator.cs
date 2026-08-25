@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http.Metadata;
 using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
@@ -14,6 +15,10 @@ namespace NativeEndpoints;
 /// implementation objects. The validator deliberately does not inspect the routing request delegate:
 /// routing owns that delegate and releases it during generation drain.
 /// </summary>
+[UnconditionalSuppressMessage("Trimming", "IL2070",
+    Justification = "Walks completed endpoint metadata looking for collectible references. Native AOT has no collectible AssemblyLoadContexts, so there is nothing here for it to find, and a trimmed host only inspects metadata it has itself published.")]
+[UnconditionalSuppressMessage("Trimming", "IL2075",
+    Justification = "Walks completed endpoint metadata looking for collectible references. Native AOT has no collectible AssemblyLoadContexts, so there is nothing here for it to find, and a trimmed host only inspects metadata it has itself published.")]
 public static class EndpointLifetimeValidator
 {
     private const int MaximumEnumerableItems = 256;

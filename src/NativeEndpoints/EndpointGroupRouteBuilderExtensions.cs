@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -27,6 +28,10 @@ public static class EndpointGroupRouteBuilderExtensions
     /// The exact Content-Type written on success responses. The charset suffix is part of a
     /// published wire contract, so it is configurable rather than assumed.
     /// </param>
+    [UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "JsonSerializerOptions.Web is only used when no JsonSerializerContext was supplied. A trimmed or AOT host supplies one.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050",
+        Justification = "JsonSerializerOptions.Web is only used when no JsonSerializerContext was supplied. A trimmed or AOT host supplies one.")]
     public static EndpointGroup MapEndpointGroup(
         this IEndpointRouteBuilder endpoints,
         string? name = null,

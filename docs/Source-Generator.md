@@ -81,9 +81,44 @@ chain. Projects in this repository that want the generator reference it directly
                   OutputItemType="Analyzer" />
 ```
 
+## What else it generates
+
+A **binder** per contract, reading each member by name with no reflection, and an **activator** that
+news the endpoint up directly from request services. Together with generated registration that
+removes every reflection path from the request flow.
+
+```csharp
+// generated
+return new(new GetWidget(
+    EndpointValue.Guid(EndpointValue.Route(context, "widgetId")),
+    body is not null ? body.Search : EndpointValue.String(EndpointValue.Query(context, "Search")),
+    EndpointValue.Array<int>(EndpointValue.QueryValues(context, "Tag"),
+        static raw => EndpointValue.Int32(raw)!)
+), null, null);
+```
+
+Body reading is *not* generated: it calls the same `EndpointRequestBinder.ReadBodyAsync` the
+reflective binder uses, so the media-type rules have one implementation and cannot drift.
+
+An endpoint whose shape is not statically resolvable falls back to reflective mapping, and the
+generated file says which ones and why.
+
 ## Native AOT
 
-Generated registration removes the assembly scan and the `MakeGenericMethod` call, which are two of
-the reflection paths that block trimming. Activation and binding still use reflection, so **AOT is
-not yet supported**. Generating those is the remaining work, and the API is shaped for it: the
-registration seam this generator already emits is where a generated binder and activator will attach.
+**Supported.** [`samples/Aot`](../samples/Aot) publishes as an 11 MB native binary with zero IL trim
+or AOT warnings, and CI republishes it on every push with those warnings escalated to errors.
+
+Three things are required, and the build tells you if any is missing:
+
+1. **Call the generated `Map()`**, not `MapEndpointsFrom`. The reflective mapper is annotated
+   `RequiresUnreferencedCode` and `RequiresDynamicCode`, so using it in a trimmed or AOT project
+   produces `IL2026` and `IL3050` at the call site rather than a failure after deployment.
+2. **Pass a `JsonSerializerContext`** to `MapEndpointGroup`. Without one the group falls back to the
+   host's options and JSON goes through runtime reflection.
+3. **Use bindable contract types.** `IParsable<T>` compiles to a constrained call on a static
+   abstract interface member, which is fully AOT-safe. This is why it is the supported way to add a
+   type.
+
+A `JsonSerializerContext` applies no naming policy unless given one, while the fallback uses
+`JsonSerializerOptions.Web`, which is camelCase. Adopting a context can therefore change your JSON
+casing, which is wire-visible; set `JsonSourceGenerationOptions` deliberately.

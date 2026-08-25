@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
@@ -32,6 +33,8 @@ public static partial class EndpointParameterDescriber
     /// Whether the operation reads a JSON body. Members that come from the body are described by the
     /// request schema instead, so they are not repeated as parameters.
     /// </param>
+    [UnconditionalSuppressMessage("Trimming", "IL2070",
+        Justification = "The contract is a generic argument of the endpoint being mapped, so it is referenced by the code that reaches here and cannot have been trimmed away.")]
     public static IReadOnlyList<EndpointParameterMetadata> Describe(Type? contract, string pattern, bool readsBody)
     {
         if (contract is null)
@@ -74,6 +77,8 @@ public static partial class EndpointParameterDescriber
         return described;
     }
 
+    [UnconditionalSuppressMessage("Trimming", "IL2070",
+        Justification = "The contract is a generic argument of the endpoint being mapped, so it is referenced by the code that reaches here and cannot have been trimmed away.")]
     private static IEnumerable<(string Name, Type Type, BindFromAttribute? Attribute, bool Optional)> Members(Type contract)
     {
         var constructors = contract.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
