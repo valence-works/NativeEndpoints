@@ -87,7 +87,8 @@ public static class EndpointRequestBinder
     public static async ValueTask<EndpointBindingResult<T>> BindAsync<T>(
         HttpContext context,
         JsonSerializerOptions jsonOptions,
-        EndpointBodyMode bodyMode)
+        EndpointBodyMode bodyMode,
+        EndpointValueBinders? valueBinders = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(jsonOptions);
@@ -139,7 +140,7 @@ public static class EndpointRequestBinder
         // A contract declared with init-only properties rather than positional parameters is bound by
         // assignment: the deserialized body is kept and route values are applied over it.
         if (parameters.Length == 0)
-            return new(BindProperties<T>(body, context), null, null);
+            return new(BindProperties<T>(body, context, valueBinders), null, null);
         var arguments = new object?[parameters.Length];
         var routeValues = context.Request.RouteValues;
         var query = context.Request.Query;
@@ -149,9 +150,21 @@ public static class EndpointRequestBinder
             var parameter = parameters[index];
             var name = parameter.Name!;
 
+            // A positional record can carry the attribute on the parameter ([FromHeader] string x)
+            // or on the generated property ([property: FromHeader] string x). Both are idiomatic, so
+            // both are honoured.
+            var declared = parameter.GetCustomAttribute<BindFromAttribute>()
+                           ?? typeof(T).GetProperty(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                               ?.GetCustomAttribute<BindFromAttribute>();
+            if (declared is not null)
+            {
+                arguments[index] = BindDeclared(context, declared, name, parameter.ParameterType, valueBinders);
+                continue;
+            }
+
             if (TryGetRouteValue(routeValues, name, out var routeValue))
             {
-                arguments[index] = Convert(routeValue, parameter.ParameterType, name);
+                arguments[index] = Convert(routeValue, parameter.ParameterType, name, valueBinders);
                 continue;
             }
 
@@ -161,9 +174,15 @@ public static class EndpointRequestBinder
                 continue;
             }
 
+            if (TryGetCollection(query, name, parameter.ParameterType, valueBinders, out var collection))
+            {
+                arguments[index] = collection;
+                continue;
+            }
+
             if (TryGetQueryValue(query, name, out var queryValue))
             {
-                arguments[index] = Convert(queryValue, parameter.ParameterType, name);
+                arguments[index] = Convert(queryValue, parameter.ParameterType, name, valueBinders);
                 continue;
             }
 
@@ -175,7 +194,7 @@ public static class EndpointRequestBinder
         return new((T)constructor.Invoke(arguments), null, null);
     }
 
-    private static T BindProperties<T>(object? body, HttpContext context)
+    private static T BindProperties<T>(object? body, HttpContext context, EndpointValueBinders? valueBinders)
     {
         var instance = body ?? Activator.CreateInstance(typeof(T))!;
         var routeValues = context.Request.RouteValues;
@@ -186,10 +205,15 @@ public static class EndpointRequestBinder
             if (!property.CanWrite)
                 continue;
 
-            if (TryGetRouteValue(routeValues, property.Name, out var routeValue))
-                property.SetValue(instance, Convert(routeValue, property.PropertyType, property.Name));
+            var declared = property.GetCustomAttribute<BindFromAttribute>();
+            if (declared is not null)
+                property.SetValue(instance, BindDeclared(context, declared, property.Name, property.PropertyType, valueBinders));
+            else if (TryGetRouteValue(routeValues, property.Name, out var routeValue))
+                property.SetValue(instance, Convert(routeValue, property.PropertyType, property.Name, valueBinders));
+            else if (body is null && TryGetCollection(query, property.Name, property.PropertyType, valueBinders, out var collection))
+                property.SetValue(instance, collection);
             else if (body is null && TryGetQueryValue(query, property.Name, out var queryValue))
-                property.SetValue(instance, Convert(queryValue, property.PropertyType, property.Name));
+                property.SetValue(instance, Convert(queryValue, property.PropertyType, property.Name, valueBinders));
         }
 
         return (T)instance;
@@ -241,7 +265,7 @@ public static class EndpointRequestBinder
         return false;
     }
 
-    private static object? Convert(string? value, Type targetType, string parameterName)
+    private static object? Convert(string? value, Type targetType, string parameterName, EndpointValueBinders? valueBinders)
     {
         var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
         if (value is null)
@@ -268,9 +292,155 @@ public static class EndpointRequestBinder
         if (underlying == typeof(DateTimeOffset))
             return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, out var instant) ? instant : DefaultOf(targetType);
 
+        // A registered parser wins over the built-in fallbacks, so a host can override how one of
+        // its own types is read without forking the binder.
+        if (valueBinders is not null && valueBinders.Handles(underlying))
+            return valueBinders.TryParse(underlying, value, CultureInfo.InvariantCulture, out var custom) ? custom : DefaultOf(targetType);
+
+        if (typeof(IParsable<>).MakeGenericType(underlying).IsAssignableFrom(underlying))
+            return TryParsable(underlying, value, out var parsable) ? parsable : DefaultOf(targetType);
+
         throw new InvalidOperationException(
             $"Request parameter '{parameterName}' has unsupported type '{targetType.FullName}'. " +
-            "Extend EndpointRequestBinder deliberately rather than widening it implicitly.");
+            $"Implement IParsable<{underlying.Name}>, or register a parser with " +
+            "AddNativeEndpoints(o => o.ValueBinders.Add<T>(...)), rather than widening the binder implicitly.");
+    }
+
+    /// <summary>Reads a member whose source was declared with a <see cref="BindFromAttribute"/>.</summary>
+    private static object? BindDeclared(
+        HttpContext context,
+        BindFromAttribute declared,
+        string memberName,
+        Type targetType,
+        EndpointValueBinders? valueBinders)
+    {
+        var key = declared.Name ?? memberName;
+        switch (declared.Source)
+        {
+            case EndpointBindingSource.Route:
+                return TryGetRouteValue(context.Request.RouteValues, key, out var route)
+                    ? Convert(route, targetType, memberName, valueBinders)
+                    : DefaultOf(targetType);
+
+            case EndpointBindingSource.Query:
+                if (TryGetCollection(context.Request.Query, key, targetType, valueBinders, out var many))
+                    return many;
+                return TryGetQueryValue(context.Request.Query, key, out var single)
+                    ? Convert(single, targetType, memberName, valueBinders)
+                    : DefaultOf(targetType);
+
+            case EndpointBindingSource.Header:
+                if (!context.Request.Headers.TryGetValue(key, out var header))
+                    return DefaultOf(targetType);
+                return ElementType(targetType) is not null
+                    ? BuildCollection(targetType, header!, memberName, valueBinders)
+                    : Convert(header.ToString(), targetType, memberName, valueBinders);
+
+            case EndpointBindingSource.Claim:
+                // An unauthenticated request simply has no claims; that is an absent value, not a
+                // binding failure. Authorization decides whether absence is allowed.
+                var claims = context.User?.FindAll(key).Select(claim => claim.Value).ToArray() ?? [];
+                if (ElementType(targetType) is not null)
+                    return BuildCollection(targetType, claims, memberName, valueBinders);
+                return claims.Length == 0
+                    ? DefaultOf(targetType)
+                    : Convert(claims[0], targetType, memberName, valueBinders);
+
+            default:
+                return DefaultOf(targetType);
+        }
+    }
+
+    /// <summary>The element type when <paramref name="type"/> is a bindable collection shape.</summary>
+    private static Type? ElementType(Type type)
+    {
+        if (type.IsArray)
+            return type.GetElementType();
+
+        if (!type.IsGenericType)
+            return null;
+
+        var definition = type.GetGenericTypeDefinition();
+        return definition == typeof(List<>) || definition == typeof(IReadOnlyList<>)
+            || definition == typeof(IList<>) || definition == typeof(IEnumerable<>) || definition == typeof(ICollection<>)
+            ? type.GetGenericArguments()[0]
+            : null;
+    }
+
+    private static bool TryGetCollection(
+        IQueryCollection query,
+        string name,
+        Type targetType,
+        EndpointValueBinders? valueBinders,
+        out object? value)
+    {
+        value = null;
+        if (ElementType(targetType) is null)
+            return false;
+
+        foreach (var entry in query)
+        {
+            if (!string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            value = BuildCollection(targetType, entry.Value!, name, valueBinders);
+            return true;
+        }
+
+        // A collection parameter with no values present binds empty rather than null, so a handler
+        // can enumerate it without a null check.
+        value = BuildCollection(targetType, [], name, valueBinders);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds an array or list from repeated request values.
+    /// </summary>
+    /// <remarks>
+    /// Repeated keys only: <c>?tag=a&amp;tag=b</c>. A comma inside one value is part of that value,
+    /// because guessing that commas separate is exactly the kind of implicit behavior that makes a
+    /// binder unpredictable.
+    /// </remarks>
+    private static object BuildCollection(Type targetType, IEnumerable<string?> raw, string memberName, EndpointValueBinders? valueBinders)
+    {
+        var element = ElementType(targetType)!;
+        var items = raw.Where(item => item is not null).ToArray();
+        var array = Array.CreateInstance(element, items.Length);
+        for (var index = 0; index < items.Length; index++)
+            array.SetValue(Convert(items[index], element, memberName, valueBinders), index);
+
+        if (targetType.IsArray)
+            return array;
+
+        var list = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(element))!;
+        foreach (var item in array)
+            list.Add(item);
+        return list;
+    }
+
+    /// <summary>Resolves and caches an <see cref="IParsable{TSelf}"/> TryParse for a type.</summary>
+    private static readonly ConditionalWeakTable<Type, MethodInfo> Parsables = new();
+
+    private static bool TryParsable(Type type, string raw, out object? value)
+    {
+        var method = Parsables.GetValue(type, static target =>
+            target.GetMethod(
+                "TryParse",
+                BindingFlags.Public | BindingFlags.Static,
+                binder: null,
+                [typeof(string), typeof(IFormatProvider), target.MakeByRefType()],
+                modifiers: null)!);
+
+        if (method is null)
+        {
+            value = null;
+            return false;
+        }
+
+        var arguments = new object?[] { raw, CultureInfo.InvariantCulture, null };
+        var parsed = (bool)method.Invoke(null, arguments)!;
+        value = parsed ? arguments[2] : null;
+        return parsed;
     }
 
     private static object? DefaultOf(Type type) => type.IsValueType ? Activator.CreateInstance(type) : null;

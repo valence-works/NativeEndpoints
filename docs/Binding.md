@@ -17,24 +17,63 @@ public sealed record GetInvoice(string InvoiceId, bool IncludeLines = false);
 
 A type with more than one public constructor is rejected at bind time; the binder will not guess.
 
+## Sources
+
+Route, body, and query participate in the default precedence. Headers and claims never do: reading
+them implicitly would let an unrelated header populate a parameter that happened to share its name.
+Ask for them:
+
+```csharp
+public sealed record ListInvoices(
+    string? Search,
+    string[] Tag,
+    [property: FromHeader("X-Tenant")] string? Tenant,
+    [property: FromClaim("sub")] string? Subject);
+```
+
+`[FromRoute]`, `[FromQuery]`, `[FromHeader]`, and `[FromClaim]` each take an optional key when it
+differs from the member's own name. On a positional record the attribute works on the parameter or,
+with `[property: ...]`, on the generated property. An unauthenticated request has no claims, so a
+claim-bound member simply binds absent; whether that is allowed is authorization's decision.
+
 ## Supported types
 
-Today: `string`, `bool`, `int`, `long`, `Guid`, `enum` (case-insensitive), and `DateTimeOffset`,
-plus `Nullable<T>` of any of them. Route and query values are converted with invariant culture.
+`string`, `bool`, `int`, `long`, `Guid`, `enum` (case-insensitive), and `DateTimeOffset`, plus
+`Nullable<T>` of any of them. Route and query values are converted with invariant culture.
+
+**Collections.** `T[]`, `List<T>`, and the read-only interfaces over them collect repeated keys:
+`?tag=a&tag=b` binds two elements. A comma inside one value is part of that value, because guessing
+that commas separate is the kind of implicit behavior that makes a binder unpredictable. A collection
+with no values present binds empty rather than null, so a handler can enumerate without a null check.
+
+**`IParsable<T>`.** Any type implementing it binds with no registration:
+
+```csharp
+public readonly record struct Slug(string Value) : IParsable<Slug> { /* ... */ }
+```
+
+**Your own types.** Register a parser for anything else:
+
+```csharp
+builder.Services.AddNativeEndpoints(o => o.ValueBinders.Add<Money>(Money.TryParse));
+```
+
+A registered parser wins over the built-in fallbacks, so a host can override how one of its own
+types is read without forking the binder.
 
 Anything else throws:
 
 ```
-Request parameter 'amount' has unsupported type 'Money'.
-Extend EndpointRequestBinder deliberately rather than widening it implicitly.
+Request parameter 'amount' has unsupported type 'Money'. Implement IParsable<Money>, or register
+a parser with AddNativeEndpoints(o => o.ValueBinders.Add<T>(...)), rather than widening the
+binder implicitly.
 ```
 
 That is a feature. A silent fallback to `default` is a bug you find in production; an exception is a
 bug you find on the first request.
 
-> **Planned.** Headers, claims, query collections (`T[]`, `List<T>`), `IParsable<T>`, and a
-> registration seam for your own types. Forms, multipart, and file upload are deliberately out of
-> scope for 1.0 — use a plain `MapPost` alongside your endpoints.
+> Forms, multipart, and file upload are deliberately out of scope for 1.0. Use a plain `MapPost`
+> alongside your endpoints.
 
 ## Body modes
 

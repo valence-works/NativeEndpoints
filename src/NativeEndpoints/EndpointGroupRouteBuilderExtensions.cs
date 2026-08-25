@@ -45,9 +45,10 @@ public static class EndpointGroupRouteBuilderExtensions
             ?? services.GetService<IOptions<JsonOptions>>()?.Value.SerializerOptions
             ?? JsonSerializerOptions.Web;
 
-        var convention = services.GetService<IOptions<NativeEndpointsOptions>>()?.Value.OperationConvention
-            ?? EndpointConventionBuilderExtensions.ApplyDefaultOperationMetadata;
+        var options = services.GetService<IOptions<NativeEndpointsOptions>>()?.Value;
+        var convention = options?.OperationConvention ?? EndpointConventionBuilderExtensions.ApplyDefaultOperationMetadata;
+        var valueBinders = options?.ValueBinders ?? new EndpointValueBinders();
 
-        return new(endpoints, groupName, jsonContext, jsonOptions, jsonContentType, convention);
+        return new(endpoints, groupName, jsonContext, jsonOptions, jsonContentType, convention, valueBinders);
     }
 }

@@ -32,6 +32,7 @@ public sealed class EndpointGroup
     private readonly JsonSerializerOptions _jsonOptions;
 
     private readonly EndpointOperationConvention _convention;
+    private readonly EndpointValueBinders _valueBinders;
 
     internal EndpointGroup(
         IEndpointRouteBuilder endpoints,
@@ -39,7 +40,8 @@ public sealed class EndpointGroup
         JsonSerializerContext? jsonContext,
         JsonSerializerOptions jsonOptions,
         string jsonContentType,
-        EndpointOperationConvention convention)
+        EndpointOperationConvention convention,
+        EndpointValueBinders valueBinders)
     {
         _endpoints = endpoints;
         Name = name;
@@ -47,6 +49,7 @@ public sealed class EndpointGroup
         _jsonOptions = jsonOptions;
         _jsonContentType = jsonContentType;
         _convention = convention;
+        _valueBinders = valueBinders;
     }
 
     /// <summary>The name applied to every endpoint in the group.</summary>
@@ -118,13 +121,14 @@ public sealed class EndpointGroup
     {
         var effectiveBodyMode = bodyMode ?? DefaultBodyMode(method);
         var jsonOptions = _jsonOptions;
+        var valueBinders = _valueBinders;
 
         RequestDelegate handler = async context =>
         {
             EndpointBindingResult<TMessage> binding;
             try
             {
-                binding = await EndpointRequestBinder.BindAsync<TMessage>(context, jsonOptions, effectiveBodyMode);
+                binding = await EndpointRequestBinder.BindAsync<TMessage>(context, jsonOptions, effectiveBodyMode, valueBinders);
             }
             catch (OperationCanceledException)
             {

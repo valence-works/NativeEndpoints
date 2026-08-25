@@ -118,9 +118,9 @@ The documented schema stays `InvoiceView`; the wrapper never reaches the wire.
 Precedence is **route, then body, then query**. Route wins over the body so a resource identifier in
 the URL cannot be contradicted by the payload.
 
-Built in today: `string`, `bool`, `int`, `long`, `Guid`, `enum`, and `DateTimeOffset`, from route
-values and the query string, plus a JSON body. Headers, claims, query collections, and
-`IParsable<T>` are next, along with the value-binder registration below.
+Built in: `string`, `bool`, `int`, `long`, `Guid`, `enum`, `DateTimeOffset`, anything implementing
+`IParsable<T>`, and arrays or lists of those from repeated query keys. Headers and claims bind on
+request with `[FromHeader]` and `[FromClaim]`, never implicitly.
 
 Anything else throws, loudly, rather than binding silently to a default. With the source generator
 enabled that throw becomes a build error:
@@ -128,6 +128,12 @@ enabled that throw becomes a build error:
 ```
 NE0004: Contract 'Transfer' has parameter 'amount' of unsupported type 'Money'.
         Register a value binder or use a supported type.
+```
+
+Register a parser for your own types:
+
+```csharp
+builder.Services.AddNativeEndpoints(o => o.ValueBinders.Add<Money>(Money.TryParse));
 ```
 
 Body handling is explicit per endpoint via `options.BodyMode`: `None`, `Optional`, `Required`, or
@@ -217,7 +223,7 @@ Choose NativeEndpoints when you want the endpoint-class shape and nothing else.
 | Escape hatch | `IEndpointConventionBuilder` | Framework-specific |
 | Registration | Generated, or explicit local scan | Process-global discovery |
 | Collectible unloading | Verified by a test you can run | Not supported |
-| Binding sources | Route, body, query | Route, query, claim, form, body, header |
+| Binding sources | Route, body, query, header, claim | Route, query, claim, form, body, header |
 | Forms and file upload | Not supported | Supported |
 | Validation | Bring your own | FluentValidation, built in |
 | Package dependencies | None | Several |
