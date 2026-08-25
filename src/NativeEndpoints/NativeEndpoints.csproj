@@ -29,7 +29,7 @@
                       PrivateAssets="all" />
   </ItemGroup>
 
-  <Target Name="PackGenerator" BeforeTargets="GenerateNuspec" DependsOnTargets="ResolveProjectReferences">
+  <Target Name="PackGenerator" BeforeTargets="GenerateNuspec">
     <ItemGroup>
       <_PackageFiles Include="$(MSBuildThisFileDirectory)../NativeEndpoints.Generator/bin/$(Configuration)/netstandard2.0/NativeEndpoints.Generator.dll"
                      PackagePath="analyzers/dotnet/cs"
