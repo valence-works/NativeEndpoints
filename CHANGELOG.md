@@ -49,6 +49,12 @@ registry, handlers published as bare `RequestDelegate`, and completed metadata v
 convention, fail-closed. `NativeEndpoints.Testing` lets you assert it in your own suite;
 `samples/PluginHost` demonstrates it in a real host across repeated load and unload cycles.
 
+### Release
+
+Published through NuGet Trusted Publishing: GitHub Actions requests a short-lived OIDC token, which
+nuget.org exchanges for a temporary key valid for one hour. There is no long-lived publishing
+credential in this repository or its organization secrets.
+
 ### Packages
 
 | Package | Dependencies |

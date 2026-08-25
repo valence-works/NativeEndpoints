@@ -14,6 +14,9 @@ on:
 
 permissions:
   contents: read
+  # Lets the job request a short-lived OIDC token from GitHub, which nuget.org exchanges for a
+  # temporary API key. No long-lived publishing credential exists anywhere in this repository.
+  id-token: write
 
 jobs:
   publish:
@@ -56,15 +59,17 @@ jobs:
           name: release-${{ steps.version.outputs.value }}
           path: artifacts/*.*nupkg
 
+      # Requested immediately before the push: the temporary key is valid for one hour, and one
+      # token buys exactly one key.
+      - name: Exchange the OIDC token for a temporary key
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Publish to nuget.org
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-        run: |
-          if [ -z "$NUGET_API_KEY" ]; then
-            echo "::error::NUGET_API_KEY is not set. Add it as a repository secret before releasing."
-            exit 1
-          fi
-          dotnet nuget push "artifacts/*.nupkg" \
-            --source https://api.nuget.org/v3/index.json \
-            --api-key "$NUGET_API_KEY" \
-            --skip-duplicate
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --source https://api.nuget.org/v3/index.json
+          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+          --skip-duplicate
