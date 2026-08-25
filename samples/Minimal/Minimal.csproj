@@ -12,6 +12,15 @@
   <ItemGroup>
     <ProjectReference Include="../../src/NativeEndpoints/NativeEndpoints.csproj" />
     <ProjectReference Include="../../src/NativeEndpoints.OpenApi/NativeEndpoints.OpenApi.csproj" />
+
+    <!--
+      Analyzers do not flow through a ProjectReference chain, only through a package's analyzers/
+      folder. A consumer installing the NuGet package gets the generator automatically; inside this
+      repository the samples reference it directly.
+    -->
+    <ProjectReference Include="../../src/NativeEndpoints.Generator/NativeEndpoints.Generator.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="Analyzer" />
   </ItemGroup>
 
 </Project>

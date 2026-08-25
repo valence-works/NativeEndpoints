@@ -17,4 +17,24 @@
     <None Include="../../README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
+  <!--
+    The generator ships inside this package as an analyzer, so `dotnet add package NativeEndpoints`
+    brings it along. ReferenceOutputAssembly is false because the compiler loads it; consumers never
+    reference it as a library.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="../NativeEndpoints.Generator/NativeEndpoints.Generator.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="Analyzer"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <Target Name="PackGenerator" BeforeTargets="GenerateNuspec" DependsOnTargets="ResolveProjectReferences">
+    <ItemGroup>
+      <_PackageFiles Include="$(MSBuildThisFileDirectory)../NativeEndpoints.Generator/bin/$(Configuration)/netstandard2.0/NativeEndpoints.Generator.dll"
+                     PackagePath="analyzers/dotnet/cs"
+                     BuildAction="None" />
+    </ItemGroup>
+  </Target>
+
 </Project>

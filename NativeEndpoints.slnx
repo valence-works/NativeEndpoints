@@ -3,6 +3,7 @@
     <Project Path="src/NativeEndpoints/NativeEndpoints.csproj" />
     <Project Path="src/NativeEndpoints.Testing/NativeEndpoints.Testing.csproj" />
     <Project Path="src/NativeEndpoints.OpenApi/NativeEndpoints.OpenApi.csproj" />
+    <Project Path="src/NativeEndpoints.Generator/NativeEndpoints.Generator.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Minimal/Minimal.csproj" />

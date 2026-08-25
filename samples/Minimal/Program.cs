@@ -2,6 +2,7 @@ using Minimal;
 using Minimal.Notes;
 using NativeEndpoints;
 using NativeEndpoints.OpenApi;
+using NativeEndpoints.Generated;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,10 +14,10 @@ builder.Services.AddSingleton<IEndpointExceptionTranslator, NoteFaultTranslator>
 
 var app = builder.Build();
 
-// One line. The group is named after this assembly, and every ApiEndpointBase in it is mapped from
-// its own attribute and namespace. Nothing is registered process-globally, and nothing survives the
-// endpoint generation.
-app.MapEndpointGroup().MapEndpointsFrom(typeof(Program).Assembly, routePrefix: "/api");
+// Generated: MinimalEndpoints.Map names every endpoint class in this assembly explicitly, so there
+// is no scan and nothing for the trimmer to be unable to see. The reflective equivalent still works:
+//     app.MapEndpointGroup().MapEndpointsFrom(typeof(Program).Assembly, routePrefix: "/api");
+app.MapEndpointGroup().Map(routePrefix: "/api");
 
 app.MapOpenApi();
 app.MapGet("/", () => Results.Redirect("/openapi/v1.json")).ExcludeFromDescription();

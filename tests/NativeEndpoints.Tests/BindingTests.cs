@@ -10,6 +10,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
 
+// Money is bound by a parser registered in AddNativeEndpoints below. The generator cannot see a
+// runtime registration, so the assembly says so and NE0002 stays quiet for it.
+[assembly: NativeEndpoints.EndpointValueBinder(typeof(NativeEndpoints.Tests.Money))]
+
 namespace NativeEndpoints.Tests;
 
 /// <summary>A domain type the binder cannot know about, reached through IParsable.</summary>

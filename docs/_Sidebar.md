@@ -4,6 +4,7 @@
 - [[Getting-Started]]
 - [[Endpoint-Classes]]
 - [[Binding]]
+- [[Source-Generator]]
 - [[Problem-Details]]
 - [[Unload-Safety]]
 - [[Migrating-from-FastEndpoints]]

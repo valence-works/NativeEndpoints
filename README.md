@@ -134,12 +134,12 @@ Built in: `string`, `bool`, `int`, `long`, `Guid`, `enum`, `DateTimeOffset`, any
 `IParsable<T>`, and arrays or lists of those from repeated query keys. Headers and claims bind on
 request with `[FromHeader]` and `[FromClaim]`, never implicitly.
 
-Anything else throws, loudly, rather than binding silently to a default. With the source generator
-enabled that throw becomes a build error:
+Anything else throws, loudly, rather than binding silently to a default. The source generator ships in the package and reports it at build time instead:
 
 ```
-NE0004: Contract 'Transfer' has parameter 'amount' of unsupported type 'Money'.
-        Register a value binder or use a supported type.
+NE0002: Contract 'Transfer' has parameter 'amount' of unsupported type 'Money'.
+        Implement IParsable<Money>, or register a parser with
+        AddNativeEndpoints(o => o.ValueBinders.Add<Money>(...)).
 ```
 
 Register a parser for your own types:
@@ -262,6 +262,7 @@ Full documentation lives in the [wiki](https://github.com/valence-works/NativeEn
 published from [`docs/`](docs) on every push to `main`.
 
 [Getting started](docs/Getting-Started.md) &middot;
+[Source generator](docs/Source-Generator.md) &middot;
 [Endpoint classes](docs/Endpoint-Classes.md) &middot;
 [Binding](docs/Binding.md) &middot;
 [Problem details](docs/Problem-Details.md) &middot;
