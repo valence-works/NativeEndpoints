@@ -14,6 +14,14 @@ namespace NativeEndpoints;
 #pragma warning disable CS1591 // the converter overloads are named after the types they produce
 public static class EndpointValue
 {
+    /// <summary>Whether the caller actually sent this body property.</summary>
+    /// <remarks>
+    /// Null means the body was not a JSON object, in which case anything deserialized from it counts
+    /// as supplied. This is what separates "sent as null" from "not sent".
+    /// </remarks>
+    public static bool Supplied(IReadOnlySet<string>? supplied, string name) =>
+        supplied is null || supplied.Contains(name);
+
     /// <summary>Reads a route value, or null when it is absent.</summary>
     public static string? Route(HttpContext context, string name)
     {
@@ -69,40 +77,72 @@ public static class EndpointValue
     /// <summary>A blank value means absent, matching the reflective binder.</summary>
     private static bool Absent(string? raw) => string.IsNullOrEmpty(raw);
 
-    public static string? String(string? raw) => raw;
+    /// <summary>
+    /// Either the type's default, or a strict-parsing failure naming the value the caller sent.
+    /// </summary>
+    /// <remarks>
+    /// The single place both binders decide what an unreadable value means, so lenient and strict
+    /// behaviour cannot differ between the reflective path and the generated one.
+    /// </remarks>
+    private static T Reject<T>(string? raw, bool strict, string? name, string typeName) =>
+        strict
+            ? throw new EndpointStrictValueException(name ?? "value", raw ?? string.Empty, typeName)
+            : default!;
 
-    public static bool Boolean(string? raw) => !Absent(raw) && bool.TryParse(raw, out var value) && value;
+    // Every converter takes the same (raw, strict, name) shape so generated code can emit one form
+    // for all of them. Absent means null for a nullable target and, under strict parsing, a failure
+    // for a non-nullable one: a caller who sent nothing for a required typed value sent something
+    // unreadable.
 
-    public static bool? NullableBoolean(string? raw) => Absent(raw) ? null : bool.TryParse(raw, out var value) ? value : null;
+    public static string? String(string? raw, bool strict = false, string? name = null) => raw;
 
-    public static int Int32(string? raw) =>
-        !Absent(raw) && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : default;
+    public static bool Boolean(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? Reject<bool>(raw, strict, name, "Boolean")
+        : bool.TryParse(raw, out var value) ? value : Reject<bool>(raw, strict, name, "Boolean");
 
-    public static int? NullableInt32(string? raw) =>
-        !Absent(raw) && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
+    public static bool? NullableBoolean(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? null
+        : bool.TryParse(raw, out var value) ? value : Reject<bool?>(raw, strict, name, "Boolean");
 
-    public static long Int64(string? raw) =>
-        !Absent(raw) && long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : default;
+    public static int Int32(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? Reject<int>(raw, strict, name, "Int32")
+        : int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : Reject<int>(raw, strict, name, "Int32");
 
-    public static long? NullableInt64(string? raw) =>
-        !Absent(raw) && long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
+    public static int? NullableInt32(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? null
+        : int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : Reject<int?>(raw, strict, name, "Int32");
 
-    public static Guid Guid(string? raw) => !Absent(raw) && System.Guid.TryParse(raw, out var value) ? value : default;
+    public static long Int64(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? Reject<long>(raw, strict, name, "Int64")
+        : long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : Reject<long>(raw, strict, name, "Int64");
 
-    public static Guid? NullableGuid(string? raw) => !Absent(raw) && System.Guid.TryParse(raw, out var value) ? value : null;
+    public static long? NullableInt64(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? null
+        : long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : Reject<long?>(raw, strict, name, "Int64");
 
-    public static DateTimeOffset DateTimeOffset(string? raw) =>
-        !Absent(raw) && System.DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : default;
+    public static Guid Guid(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? Reject<Guid>(raw, strict, name, "Guid")
+        : System.Guid.TryParse(raw, out var value) ? value : Reject<Guid>(raw, strict, name, "Guid");
 
-    public static DateTimeOffset? NullableDateTimeOffset(string? raw) =>
-        !Absent(raw) && System.DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : null;
+    public static Guid? NullableGuid(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? null
+        : System.Guid.TryParse(raw, out var value) ? value : Reject<Guid?>(raw, strict, name, "Guid");
 
-    /// <summary>Enum parsing through the generic overload, which needs no runtime type lookup.</summary>
-    public static TEnum Enum<TEnum>(string? raw) where TEnum : struct, Enum =>
-        !Absent(raw) && System.Enum.TryParse<TEnum>(raw, ignoreCase: true, out var value) ? value : default;
+    public static DateTimeOffset DateTimeOffset(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? Reject<DateTimeOffset>(raw, strict, name, "DateTimeOffset")
+        : System.DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : Reject<DateTimeOffset>(raw, strict, name, "DateTimeOffset");
 
-    public static TEnum? NullableEnum<TEnum>(string? raw) where TEnum : struct, Enum =>
-        !Absent(raw) && System.Enum.TryParse<TEnum>(raw, ignoreCase: true, out var value) ? value : null;
+    public static DateTimeOffset? NullableDateTimeOffset(string? raw, bool strict = false, string? name = null) =>
+        Absent(raw) ? null
+        : System.DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : Reject<DateTimeOffset?>(raw, strict, name, "DateTimeOffset");
+
+    public static TEnum Enum<TEnum>(string? raw, bool strict = false, string? name = null) where TEnum : struct, Enum =>
+        Absent(raw) ? Reject<TEnum>(raw, strict, name, typeof(TEnum).Name)
+        : System.Enum.TryParse<TEnum>(raw, ignoreCase: true, out var value) ? value : Reject<TEnum>(raw, strict, name, typeof(TEnum).Name);
+
+    public static TEnum? NullableEnum<TEnum>(string? raw, bool strict = false, string? name = null) where TEnum : struct, Enum =>
+        Absent(raw) ? null
+        : System.Enum.TryParse<TEnum>(raw, ignoreCase: true, out var value) ? value : Reject<TEnum?>(raw, strict, name, typeof(TEnum).Name);
 
     /// <summary>
     /// Parses through <see cref="IParsable{TSelf}"/>'s static abstract member.
@@ -111,11 +151,13 @@ public static class EndpointValue
     /// A direct constrained call, so there is no <c>GetMethod</c> and nothing for a trimmer to miss.
     /// This is why <c>IParsable&lt;T&gt;</c> is the supported way to add a type.
     /// </remarks>
-    public static T Parsable<T>(string? raw) where T : IParsable<T> =>
-        !Absent(raw) && T.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : default!;
+    public static T Parsable<T>(string? raw, bool strict = false, string? name = null) where T : IParsable<T> =>
+        Absent(raw) ? Reject<T>(raw, strict, name, typeof(T).Name)
+        : T.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : Reject<T>(raw, strict, name, typeof(T).Name);
 
-    public static T? NullableParsable<T>(string? raw) where T : struct, IParsable<T> =>
-        !Absent(raw) && T.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : null;
+    public static T? NullableParsable<T>(string? raw, bool strict = false, string? name = null) where T : struct, IParsable<T> =>
+        Absent(raw) ? null
+        : T.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : Reject<T?>(raw, strict, name, typeof(T).Name);
 
     /// <summary>Falls back to a parser registered at runtime, for a type with no other route in.</summary>
     public static T Registered<T>(string? raw, EndpointValueBinders? binders)

@@ -41,6 +41,10 @@ claim-bound member simply binds absent; whether that is allowed is authorization
 `string`, `bool`, `int`, `long`, `Guid`, `enum` (case-insensitive), and `DateTimeOffset`, plus
 `Nullable<T>` of any of them. Route and query values are converted with invariant culture.
 
+**Explicit nulls.** A property the caller sent as `null` stays null; one they omitted falls through
+to the query string. The binder records which properties were actually present in the JSON, so those
+two cases are distinguishable rather than both looking like "no value".
+
 **Collections.** `T[]`, `List<T>`, and the read-only interfaces over them collect repeated keys:
 `?tag=a&tag=b` binds two elements. A comma inside one value is part of that value, because guessing
 that commas separate is the kind of implicit behavior that makes a binder unpredictable. A collection
@@ -113,6 +117,35 @@ body mode. A GET that binds from the query can still advertise its request shape
 options.Accepts = ["*/*", "application/json"];
 ```
 
+## Strict parsing
+
+By default a typed route or query value that does not parse falls back to the parameter's default:
+`?page=notanumber` binds `0`. That is what most published contracts already do, so it is the default
+here too. It is also the one place the binder does bind silently, which sits awkwardly beside
+everything else on this page.
+
+Turn it off per endpoint:
+
+```csharp
+public override void Configure(ApiEndpointOptions options) => options.StrictTypedParsing = true;
+```
+
+Now the same request is a `400` naming the value:
+
+```json
+{ "generalErrors": ["Value [notanumber] is not valid for a [Int32] property!"] }
+```
+
+The reported key is the wire name the query string documents (`page`), not the constructor parameter
+it binds into (`Page`).
+
+Absent is not the same as unreadable. A nullable member the caller omitted is simply null, strict or
+not. A non-nullable typed member with no value is a failure under strict parsing, because the caller
+was required to send something readable and did not.
+
+For a new endpoint this is the better setting. It is opt-in only because turning it on changes what
+an existing API returns.
+
 ## Failures
 
 | Failure | Status |
@@ -120,5 +153,6 @@ options.Accepts = ["*/*", "application/json"];
 | `UnsupportedMediaType` | 415 |
 | `MissingBody` | 400 |
 | `MalformedBody` | 400, with the serializer's message under `serializerErrors` |
+| `InvalidTypedValue` | 400, naming the value. Only under strict parsing |
 
 Failures are written through the configured `IEndpointProblemWriter`. See [[Problem-Details]].

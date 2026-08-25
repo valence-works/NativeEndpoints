@@ -11,5 +11,4 @@ namespace NativeEndpoints;
 public delegate ValueTask<EndpointBindingResult<T>> EndpointBinder<T>(
     HttpContext context,
     JsonSerializerOptions jsonOptions,
-    EndpointBodyMode bodyMode,
-    EndpointValueBinders? valueBinders);
+    EndpointBindingOptions options);

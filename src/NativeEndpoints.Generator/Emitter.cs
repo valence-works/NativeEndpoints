@@ -26,16 +26,20 @@ internal static class Emitter
         builder.AppendLine($"        internal static async global::System.Threading.Tasks.ValueTask<global::NativeEndpoints.EndpointBindingResult<{endpoint.RequestType}>> Bind(");
         builder.AppendLine("            global::Microsoft.AspNetCore.Http.HttpContext context,");
         builder.AppendLine("            global::System.Text.Json.JsonSerializerOptions jsonOptions,");
-        builder.AppendLine("            global::NativeEndpoints.EndpointBodyMode bodyMode,");
-        builder.AppendLine("            global::NativeEndpoints.EndpointValueBinders? valueBinders)");
+        builder.AppendLine("            global::NativeEndpoints.EndpointBindingOptions options)");
         builder.AppendLine("        {");
         builder.AppendLine("            // Body reading is shared with the reflective binder so the media-type rules cannot drift.");
-        builder.AppendLine($"            var read = await global::NativeEndpoints.EndpointRequestBinder.ReadBodyAsync<{endpoint.RequestType}>(context, jsonOptions, bodyMode);");
+        builder.AppendLine($"            var read = await global::NativeEndpoints.EndpointRequestBinder.ReadBodyAsync<{endpoint.RequestType}>(context, jsonOptions, options.BodyMode);");
         builder.AppendLine("            if (!read.Succeeded)");
         builder.AppendLine("                return read.Failure;");
         builder.AppendLine();
         builder.AppendLine("            var body = read.Body;");
-        builder.AppendLine($"            return new(new {endpoint.RequestType}(");
+        builder.AppendLine("            var supplied = read.SuppliedProperties;");
+        builder.AppendLine("            var valueBinders = options.ValueBinders;");
+        builder.AppendLine("            var strict = options.StrictTypedParsing;");
+        builder.AppendLine("            try");
+        builder.AppendLine("            {");
+        builder.AppendLine($"                return new(new {endpoint.RequestType}(");
 
         for (var index = 0; index < contract.Length; index++)
         {
@@ -45,10 +49,18 @@ internal static class Emitter
             if (parameter.SuppressNull && expression.Contains(" ? "))
                 expression = $"({expression})!";
 
-            builder.AppendLine($"                {expression}{separator}");
+            builder.AppendLine($"                    {expression}{separator}");
         }
 
-        builder.AppendLine("            ), null, null);");
+        builder.AppendLine("                ), null, null);");
+        builder.AppendLine("            }");
+        builder.AppendLine("            catch (global::NativeEndpoints.EndpointStrictValueException failure)");
+        builder.AppendLine("            {");
+        builder.AppendLine("                // Reported under the wire name the query string documents, matching the reflective binder.");
+        builder.AppendLine("                return new(default, global::NativeEndpoints.EndpointBindingFailure.InvalidTypedValue,");
+        builder.AppendLine("                    $\"Value [{failure.RawValue}] is not valid for a [{failure.TypeName}] property!\",");
+        builder.AppendLine("                    global::System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(failure.Name));");
+        builder.AppendLine("            }");
         builder.AppendLine("        }");
     }
 
@@ -71,7 +83,8 @@ internal static class Emitter
         // whenever no body was read, so this stays correct whatever Configure does to the body mode,
         // where a compile-time guess about it would not.
         var query = Read(parameter, "Query", parameter.Name);
-        return $"body is not null ? body.{parameter.Name} : {query}";
+        return $"body is not null && global::NativeEndpoints.EndpointValue.Supplied(supplied, \"{parameter.Name}\") "
+               + $"? body.{parameter.Name} : {query}";
     }
 
     private static string Read(ContractParameter parameter, string source, string key)
@@ -83,13 +96,13 @@ internal static class Emitter
                    + $"global::NativeEndpoints.EndpointValue.{source}Values(context, \"{key}\"), "
                    // The converter may yield null for an absent element, exactly as the reflective
                    // binder does. Harmless on value types, and required for non-nullable references.
-                   + $"static raw => global::NativeEndpoints.EndpointValue.{parameter.ElementConverter}(raw)!)";
+                   + $"raw => global::NativeEndpoints.EndpointValue.{parameter.ElementConverter}(raw, strict, \"{parameter.Name}\")!)";
         }
 
         var raw = $"global::NativeEndpoints.EndpointValue.{source}(context, \"{key}\")";
         var converted = string.IsNullOrEmpty(parameter.Converter)
             ? $"global::NativeEndpoints.EndpointValue.Registered<{parameter.TypeName}>({raw}, valueBinders)"
-            : $"global::NativeEndpoints.EndpointValue.{parameter.Converter}({raw})";
+            : $"global::NativeEndpoints.EndpointValue.{parameter.Converter}({raw}, strict, \"{parameter.Name}\")";
 
         // The reflective binder can genuinely produce null for an absent value bound to a
         // non-nullable reference parameter. The generated equivalent says so rather than pretending

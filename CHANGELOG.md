@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.0-preview.2
+
+Two features the first real consumer needed, found by starting the migration rather than by guessing.
+
+**Strict typed parsing.** `options.StrictTypedParsing` rejects a route or query value that does not
+parse, with a 400 naming it, instead of falling back to the parameter's default. Opt-in, because
+turning it on changes what an existing API returns. It also closes a hole in this library's own
+argument: the binder promised nothing misbinds silently, and then silently defaulted an unreadable
+number.
+
+**Explicit nulls are distinguishable from absent values.** The binder records which properties a
+request body actually contained, so a member sent as `null` stays null while an omitted one falls
+through to the query string. Previously both looked the same.
+
+### Breaking
+
+- `EndpointBinder<T>` and `EndpointRequestBinder.BindAsync` take an `EndpointBindingOptions` record
+  rather than loose parameters. Binding has gained settings twice now; a record stops each addition
+  being a signature break.
+- `EndpointRequestBinder.ReadBodyAsync` returns `EndpointBodyResult<T>`, which carries the supplied
+  property names alongside the body.
+- Regenerate: binders emitted by preview.1 do not match the new delegate shape.
+
 ## 1.0.0-preview.1
 
 First public preview. The API is settling but no longer moving weekly; breaking changes before 1.0

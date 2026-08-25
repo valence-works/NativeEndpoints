@@ -86,6 +86,17 @@ public sealed class ApiEndpointOptions
     /// <summary>How the request body is treated. Defaults by HTTP method.</summary>
     public EndpointBodyMode? BodyMode { get; set; }
 
+    /// <summary>
+    /// Rejects a typed route or query value that does not parse, with a 400 naming it, rather than
+    /// falling back to the parameter's default.
+    /// </summary>
+    /// <remarks>
+    /// Opt-in. The lenient fallback is what most published contracts already do, so turning this on
+    /// can change an existing API's responses. For a new endpoint it is the better setting: a value
+    /// the caller sent and the binder could not read is worth reporting.
+    /// </remarks>
+    public bool StrictTypedParsing { get; set; }
+
     /// <summary>The status written on success.</summary>
     public int SuccessStatus { get; set; } = StatusCodes.Status200OK;
 

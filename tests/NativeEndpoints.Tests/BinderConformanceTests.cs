@@ -38,6 +38,16 @@ public class BinderConformanceTests : IAsyncDisposable
         "/probe/WITH-CASE?slug=MiXeD&price=99.99&page=7",
         "/probe/abc?slug=a&price=nonsense",
         "/probe/abc?slug=&price=1",
+        "/probe/abc?page=notanumber&slug=a&price=1",
+        "/probe/abc?page=1&page=notanumber&slug=a&price=1",
+
+        // Strict parsing: the path where a generated binder could most easily disagree with the
+        // reflective one, since each decides independently what an unreadable value means.
+        "/strict?page=7",
+        "/strict?page=notanumber",
+        "/strict?page=7&filter=not-a-guid",
+        "/strict?page=7&filter=11111111-2222-3333-4444-555555555555&term=x",
+        "/strict?page=",
     ];
 
     [Theory]

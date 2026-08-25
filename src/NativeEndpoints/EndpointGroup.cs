@@ -129,11 +129,12 @@ public sealed class EndpointGroup
         int? documentedStatus,
         Func<HttpContext, TMessage, CancellationToken, Task> dispatch,
         bool? documentAuthResponses = null,
-        EndpointBinder<TMessage>? binder = null)
+        EndpointBinder<TMessage>? binder = null,
+        bool strictTypedParsing = false)
     {
         var effectiveBodyMode = bodyMode ?? DefaultBodyMode(method);
         var jsonOptions = _jsonOptions;
-        var valueBinders = _valueBinders;
+        var bindingOptions = new EndpointBindingOptions(effectiveBodyMode, strictTypedParsing, _valueBinders);
 
         RequestDelegate handler = async context =>
         {
@@ -141,8 +142,8 @@ public sealed class EndpointGroup
             try
             {
                 binding = binder is null
-                    ? await EndpointRequestBinder.BindAsync<TMessage>(context, jsonOptions, effectiveBodyMode, valueBinders)
-                    : await binder(context, jsonOptions, effectiveBodyMode, valueBinders);
+                    ? await EndpointRequestBinder.BindAsync<TMessage>(context, jsonOptions, bindingOptions)
+                    : await binder(context, jsonOptions, bindingOptions);
             }
             catch (OperationCanceledException)
             {

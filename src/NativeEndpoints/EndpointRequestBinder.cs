@@ -51,11 +51,20 @@ public enum EndpointBindingFailure
     /// <summary>A body was required and none was supplied.</summary>
     MissingBody,
     /// <summary>The body was present but could not be deserialized.</summary>
-    MalformedBody
+    MalformedBody,
+
+    /// <summary>
+    /// A typed route or query value did not parse. Raised only under strict parsing.
+    /// </summary>
+    InvalidTypedValue
 }
 
 /// <summary>The outcome of binding a request, either a value or a failure with a message.</summary>
-public readonly record struct EndpointBindingResult<T>(T? Value, EndpointBindingFailure? Failure, string? Message)
+/// <param name="Value">The bound contract, when binding succeeded.</param>
+/// <param name="Failure">Why binding failed, or null when it succeeded.</param>
+/// <param name="Message">The failure message to report.</param>
+/// <param name="Key">Names the offending value for failures that have one, in its wire form.</param>
+public readonly record struct EndpointBindingResult<T>(T? Value, EndpointBindingFailure? Failure, string? Message, string? Key = null)
 {
     /// <summary>Whether a value was bound.</summary>
     public bool Succeeded => Failure is null;
@@ -110,7 +119,7 @@ public static class EndpointRequestBinder
     /// media-type behaviour is subtle enough that two implementations of it would drift.
     /// </remarks>
     /// <returns>The deserialized body, or a failure describing why it could not be read.</returns>
-    public static async ValueTask<(bool Succeeded, T? Body, EndpointBindingResult<T> Failure)> ReadBodyAsync<T>(
+    public static async ValueTask<EndpointBodyResult<T>> ReadBodyAsync<T>(
         HttpContext context,
         JsonSerializerOptions jsonOptions,
         EndpointBodyMode bodyMode)
@@ -119,7 +128,7 @@ public static class EndpointRequestBinder
         ArgumentNullException.ThrowIfNull(jsonOptions);
 
         if (bodyMode is EndpointBodyMode.None)
-            return (true, default, default);
+            return new(true, default, default, null);
 
         var declared = !string.IsNullOrWhiteSpace(context.Request.ContentType);
         var isJson = declared && IsJsonContentType(context.Request.ContentType);
@@ -132,31 +141,42 @@ public static class EndpointRequestBinder
 
         if (unsupported)
         {
-            return (false, default, new(default, EndpointBindingFailure.UnsupportedMediaType,
-                "The request content type must be application/json."));
+            return new(false, default, new(default, EndpointBindingFailure.UnsupportedMediaType,
+                "The request content type must be application/json."), null);
         }
 
         if (bodyMode is EndpointBodyMode.Optional or EndpointBodyMode.OptionalWithContentType && !isJson)
-            return (true, default, default);
+            return new(true, default, default, null);
 
         T? body;
+        HashSet<string>? supplied = null;
         try
         {
-            // The JsonTypeInfo overload is the AOT-safe one: with a source-generated context the
-            // resolver already knows this type and nothing is discovered at runtime.
+            // Buffered so the payload can be read twice: once to deserialize, once to record which
+            // properties the caller actually sent. Without that second pass, a property sent as null
+            // and a property omitted entirely are indistinguishable, and an omitted one would stop
+            // falling through to the query string.
+            using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
+            if (document.RootElement.ValueKind is JsonValueKind.Object)
+            {
+                supplied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var property in document.RootElement.EnumerateObject())
+                    supplied.Add(property.Name);
+            }
+
             var typeInfo = jsonOptions.GetTypeInfo(typeof(T));
-            body = (T?)await JsonSerializer.DeserializeAsync(context.Request.Body, typeInfo, context.RequestAborted);
+            body = (T?)document.Deserialize(typeInfo);
         }
         catch (JsonException exception)
         {
             var message = exception.Message.Replace(" Path: $ |", "", StringComparison.Ordinal);
-            return (false, default, new(default, EndpointBindingFailure.MalformedBody, message));
+            return new(false, default, new(default, EndpointBindingFailure.MalformedBody, message), null);
         }
 
         if (body is null && bodyMode is EndpointBodyMode.Required or EndpointBodyMode.RequiredWithContentType)
-            return (false, default, new(default, EndpointBindingFailure.MissingBody, "A request body is required."));
+            return new(false, default, new(default, EndpointBindingFailure.MissingBody, "A request body is required."), null);
 
-        return (true, body, default);
+        return new(true, body, default, supplied);
     }
 
     /// <summary>Binds a request contract from the route values, the query string, and the body.</summary>
@@ -170,27 +190,50 @@ public static class EndpointRequestBinder
     public static async ValueTask<EndpointBindingResult<T>> BindAsync<T>(
         HttpContext context,
         JsonSerializerOptions jsonOptions,
-        EndpointBodyMode bodyMode,
-        EndpointValueBinders? valueBinders = null)
+        EndpointBindingOptions options)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(jsonOptions);
 
         // Body reading is shared with generated binders, so the media-type rules have exactly one
         // implementation and the two paths cannot drift apart.
-        var read = await ReadBodyAsync<T>(context, jsonOptions, bodyMode);
+        var read = await ReadBodyAsync<T>(context, jsonOptions, options.BodyMode);
         if (!read.Succeeded)
             return read.Failure;
 
         object? body = read.Body;
+        var supplied = read.SuppliedProperties;
+        var valueBinders = options.ValueBinders;
 
+        var strict = options.StrictTypedParsing;
+        try
+        {
+            return new(BindContract<T>(body, supplied, context, valueBinders, strict), null, null);
+        }
+        catch (EndpointStrictValueException failure)
+        {
+            // The reported name is the wire form the query string documents, not the Pascal-cased
+            // constructor parameter it binds into.
+            return new(default, EndpointBindingFailure.InvalidTypedValue,
+                $"Value [{failure.RawValue}] is not valid for a [{failure.TypeName}] property!",
+                JsonNamingPolicy.CamelCase.ConvertName(failure.Name));
+        }
+    }
+
+    private static T BindContract<T>(
+        object? body,
+        IReadOnlySet<string>? supplied,
+        HttpContext context,
+        EndpointValueBinders? valueBinders,
+        bool strict)
+    {
         var constructor = Constructors.GetValue(typeof(T), SelectConstructor);
         var parameters = constructor.GetParameters();
 
         // A contract declared with init-only properties rather than positional parameters is bound by
         // assignment: the deserialized body is kept and route values are applied over it.
         if (parameters.Length == 0)
-            return new(BindProperties<T>(body, context, valueBinders), null, null);
+            return BindProperties<T>(body, supplied, context, valueBinders, strict);
         var arguments = new object?[parameters.Length];
         var routeValues = context.Request.RouteValues;
         var query = context.Request.Query;
@@ -208,17 +251,17 @@ public static class EndpointRequestBinder
                                ?.GetCustomAttribute<BindFromAttribute>();
             if (declared is not null)
             {
-                arguments[index] = BindDeclared(context, declared, name, parameter.ParameterType, valueBinders);
+                arguments[index] = BindDeclared(context, declared, name, parameter.ParameterType, valueBinders, strict);
                 continue;
             }
 
             if (TryGetRouteValue(routeValues, name, out var routeValue))
             {
-                arguments[index] = Convert(routeValue, parameter.ParameterType, name, valueBinders);
+                arguments[index] = Convert(routeValue, parameter.ParameterType, name, valueBinders, strict);
                 continue;
             }
 
-            if (body is not null)
+            if (body is not null && SuppliedByBody(supplied, name))
             {
                 arguments[index] = ReadProperty(body, name, parameter.ParameterType);
                 continue;
@@ -232,7 +275,7 @@ public static class EndpointRequestBinder
 
             if (TryGetQueryValue(query, name, out var queryValue))
             {
-                arguments[index] = Convert(queryValue, parameter.ParameterType, name, valueBinders);
+                arguments[index] = Convert(queryValue, parameter.ParameterType, name, valueBinders, strict);
                 continue;
             }
 
@@ -241,10 +284,10 @@ public static class EndpointRequestBinder
                 : DefaultOf(parameter.ParameterType);
         }
 
-        return new((T)constructor.Invoke(arguments), null, null);
+        return (T)constructor.Invoke(arguments);
     }
 
-    private static T BindProperties<T>(object? body, HttpContext context, EndpointValueBinders? valueBinders)
+    private static T BindProperties<T>(object? body, IReadOnlySet<string>? supplied, HttpContext context, EndpointValueBinders? valueBinders, bool strict)
     {
         var instance = body ?? Activator.CreateInstance(typeof(T))!;
         var routeValues = context.Request.RouteValues;
@@ -257,13 +300,13 @@ public static class EndpointRequestBinder
 
             var declared = property.GetCustomAttribute<BindFromAttribute>();
             if (declared is not null)
-                property.SetValue(instance, BindDeclared(context, declared, property.Name, property.PropertyType, valueBinders));
+                property.SetValue(instance, BindDeclared(context, declared, property.Name, property.PropertyType, valueBinders, strict));
             else if (TryGetRouteValue(routeValues, property.Name, out var routeValue))
-                property.SetValue(instance, Convert(routeValue, property.PropertyType, property.Name, valueBinders));
-            else if (body is null && TryGetCollection(query, property.Name, property.PropertyType, valueBinders, out var collection))
+                property.SetValue(instance, Convert(routeValue, property.PropertyType, property.Name, valueBinders, strict));
+            else if (!SuppliedByBody(supplied, property.Name) && TryGetCollection(query, property.Name, property.PropertyType, valueBinders, out var collection))
                 property.SetValue(instance, collection);
-            else if (body is null && TryGetQueryValue(query, property.Name, out var queryValue))
-                property.SetValue(instance, Convert(queryValue, property.PropertyType, property.Name, valueBinders));
+            else if (!SuppliedByBody(supplied, property.Name) && TryGetQueryValue(query, property.Name, out var queryValue))
+                property.SetValue(instance, Convert(queryValue, property.PropertyType, property.Name, valueBinders, strict));
         }
 
         return (T)instance;
@@ -286,6 +329,10 @@ public static class EndpointRequestBinder
         var property = source.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
         return property is null ? DefaultOf(targetType) : property.GetValue(source);
     }
+
+    /// <summary>Whether the caller actually sent this property. Null means the body was not an object.</summary>
+    private static bool SuppliedByBody(IReadOnlySet<string>? supplied, string name) =>
+        supplied is null || supplied.Contains(name);
 
     private static bool TryGetRouteValue(RouteValueDictionary routeValues, string name, out string? value)
     {
@@ -315,7 +362,7 @@ public static class EndpointRequestBinder
         return false;
     }
 
-    private static object? Convert(string? value, Type targetType, string parameterName, EndpointValueBinders? valueBinders)
+    private static object? Convert(string? value, Type targetType, string parameterName, EndpointValueBinders? valueBinders, bool strict = false)
     {
         var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
         if (value is null)
@@ -324,23 +371,24 @@ public static class EndpointRequestBinder
         if (underlying == typeof(string))
             return value;
 
-        // A blank query value for a nullable parameter means "absent", matching the previous
-        // per-module helpers, which returned null rather than failing.
+        // A blank value means "absent" under the lenient default. Under strict parsing a blank
+        // value for a typed parameter is a value the caller sent that cannot be read, so it is
+        // reported rather than quietly becoming zero.
         if (value.Length == 0)
-            return DefaultOf(targetType);
+            return strict ? throw new EndpointStrictValueException(parameterName, value, underlying.Name) : DefaultOf(targetType);
 
         if (underlying == typeof(bool))
-            return bool.TryParse(value, out var boolean) ? boolean : DefaultOf(targetType);
+            return bool.TryParse(value, out var boolean) ? boolean : Fallback(value, targetType, underlying, parameterName, strict);
         if (underlying == typeof(int))
-            return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer) ? integer : DefaultOf(targetType);
+            return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer) ? integer : Fallback(value, targetType, underlying, parameterName, strict);
         if (underlying == typeof(long))
-            return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var longValue) ? longValue : DefaultOf(targetType);
+            return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var longValue) ? longValue : Fallback(value, targetType, underlying, parameterName, strict);
         if (underlying == typeof(Guid))
-            return Guid.TryParse(value, out var guid) ? guid : DefaultOf(targetType);
+            return Guid.TryParse(value, out var guid) ? guid : Fallback(value, targetType, underlying, parameterName, strict);
         if (underlying.IsEnum)
-            return Enum.TryParse(underlying, value, ignoreCase: true, out var parsed) ? parsed : DefaultOf(targetType);
+            return Enum.TryParse(underlying, value, ignoreCase: true, out var parsed) ? parsed : Fallback(value, targetType, underlying, parameterName, strict);
         if (underlying == typeof(DateTimeOffset))
-            return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, out var instant) ? instant : DefaultOf(targetType);
+            return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, out var instant) ? instant : Fallback(value, targetType, underlying, parameterName, strict);
 
         // A registered parser wins over the built-in fallbacks, so a host can override how one of
         // its own types is read without forking the binder.
@@ -362,21 +410,22 @@ public static class EndpointRequestBinder
         BindFromAttribute declared,
         string memberName,
         Type targetType,
-        EndpointValueBinders? valueBinders)
+        EndpointValueBinders? valueBinders,
+        bool strict)
     {
         var key = declared.Name ?? memberName;
         switch (declared.Source)
         {
             case EndpointBindingSource.Route:
                 return TryGetRouteValue(context.Request.RouteValues, key, out var route)
-                    ? Convert(route, targetType, memberName, valueBinders)
+                    ? Convert(route, targetType, memberName, valueBinders, strict)
                     : DefaultOf(targetType);
 
             case EndpointBindingSource.Query:
                 if (TryGetCollection(context.Request.Query, key, targetType, valueBinders, out var many))
                     return many;
                 return TryGetQueryValue(context.Request.Query, key, out var single)
-                    ? Convert(single, targetType, memberName, valueBinders)
+                    ? Convert(single, targetType, memberName, valueBinders, strict)
                     : DefaultOf(targetType);
 
             case EndpointBindingSource.Header:
@@ -384,7 +433,7 @@ public static class EndpointRequestBinder
                     return DefaultOf(targetType);
                 return ElementType(targetType) is not null
                     ? BuildCollection(targetType, header!, memberName, valueBinders)
-                    : Convert(header.ToString(), targetType, memberName, valueBinders);
+                    : Convert(header.ToString(), targetType, memberName, valueBinders, strict);
 
             case EndpointBindingSource.Claim:
                 // An unauthenticated request simply has no claims; that is an absent value, not a
@@ -394,7 +443,7 @@ public static class EndpointRequestBinder
                     return BuildCollection(targetType, claims, memberName, valueBinders);
                 return claims.Length == 0
                     ? DefaultOf(targetType)
-                    : Convert(claims[0], targetType, memberName, valueBinders);
+                    : Convert(claims[0], targetType, memberName, valueBinders, strict);
 
             default:
                 return DefaultOf(targetType);
@@ -492,6 +541,10 @@ public static class EndpointRequestBinder
         value = parsed ? arguments[2] : null;
         return parsed;
     }
+
+    /// <summary>Either the parameter's default, or a strict-mode failure naming the value.</summary>
+    private static object? Fallback(string value, Type targetType, Type underlying, string parameterName, bool strict) =>
+        strict ? throw new EndpointStrictValueException(parameterName, value, underlying.Name) : DefaultOf(targetType);
 
     private static object? DefaultOf(Type type) => type.IsValueType ? Activator.CreateInstance(type) : null;
 
