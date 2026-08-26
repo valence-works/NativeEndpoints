@@ -62,6 +62,14 @@ public static class ApiEndpointMapper
 
     private static IEndpointConventionBuilder MapEndpointCore(EndpointGroup api, Type type, string? routePrefix)
     {
+        // Resolved before anything else so a class the scan picked up but cannot map fails with the
+        // shape named, not with a misleading complaint about its route or Configure.
+        var (shape, request, response) = FindContract(type)
+            ?? throw new InvalidOperationException(
+                $"Endpoint '{type.FullName}' derives from ApiEndpointBase but from none of the mappable bases. " +
+                "Derive ApiEndpoint<TRequest, TResponse>, ApiEndpoint<TRequest>, ApiEndpointWithoutRequest<TResponse>, " +
+                "ApiEndpointWithResult<TRequest, TResponse>, or the non-generic ApiEndpoint to write the response yourself.");
+
         var options = new ApiEndpointOptions();
         var route = type.GetCustomAttribute<EndpointRouteAttribute>();
         if (route is not null)
@@ -79,11 +87,9 @@ public static class ApiEndpointMapper
             throw new InvalidOperationException($"Endpoint '{type.FullName}' declares no route. Add a [Get]/[Post]/... attribute or set options.Method and options.Route in Configure.");
         options.Operation ??= DeriveOperation(type);
 
-        var (shape, request, response) = FindContract(type)
-            ?? throw new InvalidOperationException($"Endpoint '{type.FullName}' does not derive from an ApiEndpoint base.");
-
         var builder = shape switch
         {
+            EndpointShape.Raw => MapRawEndpoint(api, type, options),
             EndpointShape.Unbound => (IEndpointConventionBuilder)MapUnboundMethod
                 .MakeGenericMethod(response!)
                 .Invoke(null, [api, type, options])!,
@@ -108,11 +114,17 @@ public static class ApiEndpointMapper
         Body,
         NoContent,
         Unbound,
-        Result
+        Result,
+        Raw
     }
 
     private static (EndpointShape shape, Type? request, Type? response)? FindContract(Type type)
     {
+        // The raw base is non-generic and derives ApiEndpointBase directly, so the check runs before
+        // the generic walk: no generic base can sit between a raw endpoint and ApiEndpoint.
+        if (typeof(ApiEndpoint).IsAssignableFrom(type))
+            return (EndpointShape.Raw, null, null);
+
         for (var current = type.BaseType; current is not null; current = current.BaseType)
         {
             if (!current.IsGenericType)
@@ -176,6 +188,19 @@ public static class ApiEndpointMapper
             var endpoint = (ApiEndpointWithoutRequest<TResponse>)factory(context.RequestServices, null);
             endpoint.HttpContext = context;
             return await endpoint.HandleAsync(cancellationToken);
+        });
+    }
+
+    private static IEndpointConventionBuilder MapRawEndpoint(
+        EndpointGroup api, Type endpointType, ApiEndpointOptions options)
+    {
+        var factory = ActivatorUtilities.CreateFactory(endpointType, Type.EmptyTypes);
+
+        return api.MapRaw(options, async context =>
+        {
+            var endpoint = (ApiEndpoint)factory(context.RequestServices, null);
+            endpoint.HttpContext = context;
+            await endpoint.HandleAsync(context.RequestAborted);
         });
     }
 

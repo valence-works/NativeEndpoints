@@ -43,6 +43,7 @@ for anyone who cannot run the generator.
 | `NE0002` | A contract parameter has a type the binder cannot produce from a request string |
 | `NE0003` | `Configure` reads constructor-injected state, which is null at map time |
 | `NE0004` | A contract has more than one public constructor, so the binder will throw when the route is first called |
+| `NE0005` | Endpoint derives `ApiEndpointBase` directly, which no mapper can dispatch; derive the non-generic `ApiEndpoint` or one of the four contract shapes |
 
 `NE0002` is the one that earns the generator its place. Without it, a contract parameter the binder
 cannot convert throws on the first request that reaches the route, in whichever environment reaches
@@ -101,7 +102,18 @@ Body reading is *not* generated: it calls the same `EndpointRequestBinder.ReadBo
 reflective binder uses, so the media-type rules have one implementation and cannot drift.
 
 An endpoint whose shape is not statically resolvable falls back to reflective mapping, and the
-generated file says which ones and why.
+generated file says which ones and why. That covers, besides a contract with more than one public
+constructor:
+
+- **A property-bound contract** — a parameterless constructor with settable properties. The emitted
+  construction would discard the deserialized body; the reflective binder keeps the body and lays
+  route, query, and declared sources over it.
+- **A contract with a constructor-parameter default** (`int Page = 3`). Defaults are compile-time
+  constants the emitter would have to re-literalize correctly for every supported type; the
+  reflective binder reads them at bind time and honors them today.
+
+The fallback registers the same endpoint through `MapEndpoint<T>`, so nothing disappears — a slower
+correct path, not a missing one.
 
 ## Native AOT
 

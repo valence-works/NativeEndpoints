@@ -21,7 +21,9 @@ app.Run();
 ```
 
 `AddNativeEndpoints` registers the default problem writer, so a binding failure returns a sensible
-body without further configuration.
+body without further configuration. It is required: `MapEndpointGroup` checks for the problem
+writer and fails at mapping time — with the remedy in the message — rather than letting the
+omission surface as an opaque 500 on the first binding failure at runtime.
 
 `MapEndpointGroup` opens a group. Every argument is optional:
 

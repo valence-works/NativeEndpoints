@@ -12,8 +12,14 @@ internal static class Emitter
         var slot = $"Endpoint{index}";
         builder.AppendLine($"    private static class {slot}");
         builder.AppendLine("    {");
-        Binder(builder, endpoint);
-        builder.AppendLine();
+
+        // A raw or response-only endpoint binds nothing, so its slot is just the activator.
+        if (endpoint.Shape is not (EndpointShape.Raw or EndpointShape.ResponseOnly))
+        {
+            Binder(builder, endpoint);
+            builder.AppendLine();
+        }
+
         Activator(builder, endpoint, slot);
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -23,13 +29,35 @@ internal static class Emitter
     private static void Binder(StringBuilder builder, EndpointModel endpoint)
     {
         var contract = endpoint.Contract;
+
+        // The per-element converters close over nothing, so each is allocated once per endpoint
+        // rather than once per request. Which of the pair applies is decided by the per-call strict
+        // flag, keeping the emitted conversion identical to the captured lambda it replaces.
+        foreach (var parameter in contract.Where(item => item.IsArray || item.IsList))
+        {
+            var converter = parameter.ElementConverter!;
+            builder.AppendLine($"        private static readonly global::System.Func<string?, {parameter.ElementTypeName}> Convert{parameter.Name}Strict =");
+            builder.AppendLine($"            static raw => global::NativeEndpoints.EndpointValue.{converter}(raw, true, \"{parameter.Name}\")!;");
+            builder.AppendLine($"        private static readonly global::System.Func<string?, {parameter.ElementTypeName}> Convert{parameter.Name}Lenient =");
+            builder.AppendLine($"            static raw => global::NativeEndpoints.EndpointValue.{converter}(raw, false, \"{parameter.Name}\")!;");
+            builder.AppendLine();
+        }
+
+        // Whether any member could fall back from the body to the query, which is the only reader
+        // of the supplied-property set. Members bound from a route value or a declared source never
+        // consult it, so a contract made only of those lets the body stream through the serializer
+        // in one pass instead of buffering a DOM.
+        var needsSupplied = contract.Any(parameter =>
+            parameter.DeclaredSource is null &&
+            !endpoint.RouteKeys.Any(key => string.Equals(key, parameter.Name, System.StringComparison.OrdinalIgnoreCase)));
+
         builder.AppendLine($"        internal static async global::System.Threading.Tasks.ValueTask<global::NativeEndpoints.EndpointBindingResult<{endpoint.RequestType}>> Bind(");
         builder.AppendLine("            global::Microsoft.AspNetCore.Http.HttpContext context,");
         builder.AppendLine("            global::System.Text.Json.JsonSerializerOptions jsonOptions,");
         builder.AppendLine("            global::NativeEndpoints.EndpointBindingOptions options)");
         builder.AppendLine("        {");
         builder.AppendLine("            // Body reading is shared with the reflective binder so the media-type rules cannot drift.");
-        builder.AppendLine($"            var read = await global::NativeEndpoints.EndpointRequestBinder.ReadBodyAsync<{endpoint.RequestType}>(context, jsonOptions, options.BodyMode);");
+        builder.AppendLine($"            var read = await global::NativeEndpoints.EndpointRequestBinder.ReadBodyAsync<{endpoint.RequestType}>(context, jsonOptions, options.BodyMode, needsSuppliedProperties: {(needsSupplied ? "true" : "false")});");
         builder.AppendLine("            if (!read.Succeeded)");
         builder.AppendLine("                return read.Failure;");
         builder.AppendLine();
@@ -96,12 +124,12 @@ internal static class Emitter
                    + $"global::NativeEndpoints.EndpointValue.{source}Values(context, \"{key}\"), "
                    // The converter may yield null for an absent element, exactly as the reflective
                    // binder does. Harmless on value types, and required for non-nullable references.
-                   + $"raw => global::NativeEndpoints.EndpointValue.{parameter.ElementConverter}(raw, strict, \"{parameter.Name}\")!)";
+                   + $"strict ? Convert{parameter.Name}Strict : Convert{parameter.Name}Lenient)";
         }
 
         var raw = $"global::NativeEndpoints.EndpointValue.{source}(context, \"{key}\")";
         var converted = string.IsNullOrEmpty(parameter.Converter)
-            ? $"global::NativeEndpoints.EndpointValue.Registered<{parameter.TypeName}>({raw}, valueBinders)"
+            ? $"global::NativeEndpoints.EndpointValue.Registered<{parameter.TypeName}>({raw}, valueBinders, strict, \"{parameter.Name}\")"
             : $"global::NativeEndpoints.EndpointValue.{parameter.Converter}({raw}, strict, \"{parameter.Name}\")";
 
         // The reflective binder can genuinely produce null for an absent value bound to a
@@ -151,9 +179,15 @@ internal static class Emitter
             EndpointShape.RequestOnly =>
                 $"group.MapGeneratedNoContent<{endpoint.QualifiedName}, {endpoint.RequestType}>("
                 + $"options, {slot}.Bind, {slot}.Create, static (endpoint, request, token) => endpoint.HandleAsync(request, token));",
+            EndpointShape.ResponseOnly =>
+                $"group.MapGeneratedUnbound<{endpoint.QualifiedName}, {endpoint.ResponseType}>("
+                + $"options, {slot}.Create, static (endpoint, token) => endpoint.HandleAsync(token));",
             EndpointShape.RequestResult =>
                 $"group.MapGeneratedResult<{endpoint.QualifiedName}, {endpoint.RequestType}, {endpoint.ResponseType}>("
                 + $"options, {slot}.Bind, {slot}.Create, static (endpoint, request, token) => endpoint.HandleAsync(request, token));",
+            EndpointShape.Raw =>
+                $"group.MapRaw(options, static async context => {{ var endpoint = {slot}.Create(context.RequestServices); "
+                + "endpoint.HttpContext = context; await endpoint.HandleAsync(context.RequestAborted); });",
             _ => string.Empty
         };
 

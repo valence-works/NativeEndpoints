@@ -6,6 +6,11 @@ using Microsoft.CodeAnalysis;
 namespace NativeEndpoints.Generator;
 
 /// <summary>One endpoint class, reduced to what the generator needs to emit a registration.</summary>
+/// <remarks>
+/// Every member compares by value — collections through <see cref="EquatableArray{T}"/>, because
+/// record equality over <see cref="ImmutableArray{T}"/> is reference equality — so the incremental
+/// pipeline can recognise an unchanged endpoint and skip regeneration.
+/// </remarks>
 internal sealed record EndpointModel(
     string QualifiedName,
     string DisplayName,
@@ -15,17 +20,31 @@ internal sealed record EndpointModel(
     bool HasRoute,
     string? HttpMethod,
     string? RoutePattern,
-    ImmutableArray<ContractParameter> Contract,
-    ImmutableArray<string> Dependencies,
-    ImmutableArray<string> RouteKeys,
+    EquatableArray<ContractParameter> Contract,
+    EquatableArray<string> Dependencies,
+    EquatableArray<string> RouteKeys,
     int PublicConstructorCount,
     string? ContractName,
     string Operation,
     bool Generatable,
-    ImmutableArray<ConfigureRead> ConfigureReads);
+    EquatableArray<ConfigureRead> ConfigureReads);
 
 /// <summary>A piece of instance state that Configure reads, and where it reads it.</summary>
-internal sealed record ConfigureRead(string Member, Location Location);
+/// <remarks>
+/// Holds the location's raw data rather than a <see cref="Microsoft.CodeAnalysis.Location"/>: a
+/// Location references its syntax tree and changes identity on every edit, which would poison the
+/// pipeline cache. The pieces here are value-equatable, and <see cref="Location"/> rebuilds the
+/// same file/line/column for the diagnostic at report time.
+/// </remarks>
+internal sealed record ConfigureRead(
+    string Member,
+    string FilePath,
+    Microsoft.CodeAnalysis.Text.TextSpan Span,
+    Microsoft.CodeAnalysis.Text.LinePositionSpan LineSpan)
+{
+    /// <summary>Rebuilds the report location from the captured data.</summary>
+    internal Location Location => Location.Create(FilePath, Span, LineSpan);
+}
 
 /// <summary>One contract member, and everything the emitter needs to read it without reflection.</summary>
 internal sealed record ContractParameter(
@@ -39,7 +58,8 @@ internal sealed record ContractParameter(
     bool IsList,
     string? DeclaredSource,
     string? DeclaredKey,
-    bool SuppressNull);
+    bool SuppressNull,
+    bool HasDefaultValue);
 
 /// <summary>Which base an endpoint derives from, and therefore how it is mapped.</summary>
 internal enum EndpointShape
@@ -56,7 +76,10 @@ internal enum EndpointShape
     /// <summary>ApiEndpointWithResult&lt;TRequest, TResponse&gt;</summary>
     RequestResult,
 
-    /// <summary>ApiEndpointBase, writing its own response. The generator cannot map these.</summary>
+    /// <summary>ApiEndpoint, non-generic: the handler writes the response itself.</summary>
+    Raw,
+
+    /// <summary>ApiEndpointBase directly, which no mapper can dispatch. Reported as NE0005 and excluded.</summary>
     Unsupported
 }
 
@@ -176,10 +199,21 @@ internal static class EndpointSymbols
     /// <summary>The EndpointValue call that converts a raw string into this type.</summary>
     internal static string? Converter(ITypeSymbol type)
     {
-        var nullable = type is INamedTypeSymbol { IsGenericType: true } candidate &&
-                       candidate.ConstructedFrom.SpecialType == SpecialType.System_Nullable_T;
-        var underlying = nullable ? ((INamedTypeSymbol)type).TypeArguments[0] : type;
-        var prefix = nullable ? "Nullable" : string.Empty;
+        var nullableValue = type is INamedTypeSymbol { IsGenericType: true } candidate &&
+                            candidate.ConstructedFrom.SpecialType == SpecialType.System_Nullable_T;
+
+        // A nullable-ANNOTATED reference type ("Phone?") is not Nullable<T>: the annotation only
+        // decorates the symbol and its display string. Strip it so "string?" still matches the
+        // string case below, and remember it so a nullable reference IParsable maps to the
+        // converter that treats absence as null — Parsable<T> rejects absence under strict
+        // parsing, which would 400 a member the docs promise "is simply null" when omitted.
+        var nullableReference = !nullableValue &&
+            type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated };
+
+        var underlying = nullableValue ? ((INamedTypeSymbol)type).TypeArguments[0]
+            : nullableReference ? type.WithNullableAnnotation(NullableAnnotation.NotAnnotated)
+            : type;
+        var prefix = nullableValue ? "Nullable" : string.Empty;
 
         switch (underlying.ToDisplayString())
         {
@@ -196,7 +230,15 @@ internal static class EndpointSymbols
             return $"{prefix}Enum<{qualified}>";
 
         if (underlying.AllInterfaces.Any(item => item.ConstructedFrom.ToDisplayString() == "System.IParsable<TSelf>"))
-            return nullable ? $"NullableParsable<{qualified}>" : $"Parsable<{qualified}>";
+        {
+            // A NON-nullable reference IParsable stays Parsable<T>, the known remaining corner:
+            // under strict parsing the generated converter rejects absence while the reflective
+            // binder (whose RejectsAbsence covers value types only) binds null. Kept deliberately —
+            // silently changing the reflective binder's answer would be worse than the asymmetry.
+            return nullableValue ? $"NullableParsable<{qualified}>"
+                : nullableReference ? $"ParsableOrDefault<{qualified}>"
+                : $"Parsable<{qualified}>";
+        }
 
         return null;
     }
@@ -268,7 +310,14 @@ internal static class EndpointSymbols
         for (var current = type.BaseType; current is not null; current = current.BaseType)
         {
             if (current.TypeArguments.Length == 0)
+            {
+                // The raw base is the one non-generic base that is mappable; it derives
+                // ApiEndpointBase directly, so no generic base can hide behind it.
+                if (current.ToDisplayString() == "NativeEndpoints.ApiEndpoint")
+                    return (EndpointShape.Raw, null, null);
+
                 continue;
+            }
 
             var definition = current.ConstructedFrom.ToDisplayString();
             var arguments = current.TypeArguments

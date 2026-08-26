@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="FastEndpoints" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/NativeEndpoints/NativeEndpoints.csproj" />
+
+    <!--
+      The generator runs over this project's own endpoint classes, so the "generated" stack maps
+      the exact classes the "reflective" stack maps - the comparison isolates the binding path,
+      not the endpoints. Analyzer reference, same pattern as the tests and samples.
+    -->
+    <ProjectReference Include="../../src/NativeEndpoints.Generator/NativeEndpoints.Generator.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="Analyzer" />
+  </ItemGroup>
+
+</Project>

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace NativeEndpoints;
 
@@ -72,13 +73,26 @@ public sealed class EndpointGroup
         EndpointBodyMode? bodyMode = null,
         string[]? accepts = null,
         int successStatus = StatusCodes.Status200OK)
-        where TResponse : notnull =>
-        MapOperation<TRequest>(            method, pattern, operation, bodyMode, accepts, typeof(TResponse), successStatus, null,
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapOperation<TRequest>(
+            new EndpointOperationDescriptor
+            {
+                Method = method,
+                Pattern = pattern,
+                Operation = operation,
+                BodyMode = bodyMode,
+                Accepts = accepts,
+                ResponseType = typeof(TResponse),
+                SuccessStatus = successStatus
+            },
             async (context, request, cancellationToken) =>
             {
                 var response = await handler(context, request, cancellationToken);
-                await WriteJsonAsync(context, response, successStatus);
+                await writer.WriteAsync(context, response, successStatus);
             });
+    }
 
     /// <summary>Maps a route that takes no request contract onto an inline handler.</summary>
     public IEndpointConventionBuilder MapHandler<TResponse>(
@@ -87,9 +101,20 @@ public sealed class EndpointGroup
         string operation,
         Func<HttpContext, CancellationToken, Task<TResponse>> handler,
         int successStatus = StatusCodes.Status200OK)
-        where TResponse : notnull =>
-        MapUnbound(method, pattern, operation, typeof(TResponse), successStatus,
-            async context => await WriteJsonAsync(context, await handler(context, context.RequestAborted), successStatus));
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapUnbound(
+            new EndpointOperationDescriptor
+            {
+                Method = method,
+                Pattern = pattern,
+                Operation = operation,
+                ResponseType = typeof(TResponse),
+                SuccessStatus = successStatus
+            },
+            async context => await writer.WriteAsync(context, await handler(context, context.RequestAborted), successStatus));
+    }
 
     /// <summary>Writes a value using the owner's source-generated serializer metadata.</summary>
     [UnconditionalSuppressMessage("Trimming", "IL2026",
@@ -111,30 +136,60 @@ public sealed class EndpointGroup
     }
 
     /// <summary>
+    /// A per-endpoint success writer that resolves the response type's serializer metadata once and
+    /// reuses it for every request, instead of looking it up per response.
+    /// </summary>
+    /// <remarks>
+    /// Metadata is resolved on first use rather than at map time: resolution can throw — no
+    /// source-generated metadata for the type, or options with no resolver — and that failure is
+    /// contractually a per-request 500 through the shared failure path, not a startup crash.
+    /// The fast path writes exactly what <see cref="WriteJsonAsync"/> writes for a non-null value of
+    /// the declared type; a null value (which writes no body) and a runtime type diverging from the
+    /// declared one (which serializes polymorphically) keep the original
+    /// <see cref="WriteJsonAsync"/> path so the observable behaviour cannot drift.
+    /// </remarks>
+    private sealed class EndpointJsonWriter<TValue>(EndpointGroup group)
+    {
+        private JsonTypeInfo<TValue>? _typeInfo;
+
+        public Task WriteAsync(HttpContext context, TValue value, int statusCode)
+        {
+            if (value is null || !(typeof(TValue).IsValueType || value.GetType() == typeof(TValue)))
+                return group.WriteJsonAsync(context, value, statusCode);
+
+            // Status first, matching WriteJsonAsync: a metadata failure below must still leave the
+            // status it left before.
+            context.Response.StatusCode = statusCode;
+            var typeInfo = _typeInfo ??= Resolve();
+            return context.Response.WriteAsJsonAsync(value, typeInfo, group._jsonContentType);
+        }
+
+        private JsonTypeInfo<TValue> Resolve() => (JsonTypeInfo<TValue>)(group._jsonContext is null
+            ? group._jsonOptions.GetTypeInfo(typeof(TValue))
+            : group._jsonContext.GetTypeInfo(typeof(TValue))
+              ?? throw new InvalidOperationException($"No source-generated JSON metadata exists for '{typeof(TValue).FullName}'."));
+    }
+
+    /// <summary>
     /// The low-level operation pipeline: bind, dispatch, translate failures, and attach the module
-    /// operation metadata. The typed Map methods and external bridges compose on top of this.
+    /// operation metadata. The typed Map methods and external bridges compose on top of this,
+    /// describing the operation with an <see cref="EndpointOperationDescriptor"/>.
     /// </summary>
     [UnconditionalSuppressMessage("Trimming", "IL2026",
         Justification = "The reflective binder is only called when no generated binder was supplied. A trimmed or AOT build runs the generator, which supplies one.")]
     [UnconditionalSuppressMessage("AOT", "IL3050",
         Justification = "The reflective binder is only called when no generated binder was supplied. A trimmed or AOT build runs the generator, which supplies one.")]
     public IEndpointConventionBuilder MapOperation<TMessage>(
-        string method,
-        string pattern,
-        string operation,
-        EndpointBodyMode? bodyMode,
-        string[]? accepts,
-        Type? responseType,
-        int successStatus,
-        int? documentedStatus,
+        EndpointOperationDescriptor descriptor,
         Func<HttpContext, TMessage, CancellationToken, Task> dispatch,
-        bool? documentAuthResponses = null,
-        EndpointBinder<TMessage>? binder = null,
-        bool strictTypedParsing = false)
+        EndpointBinder<TMessage>? binder = null)
     {
-        var effectiveBodyMode = bodyMode ?? DefaultBodyMode(method);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentNullException.ThrowIfNull(dispatch);
+
+        var effectiveBodyMode = descriptor.BodyMode ?? DefaultBodyMode(descriptor.Method);
         var jsonOptions = _jsonOptions;
-        var bindingOptions = new EndpointBindingOptions(effectiveBodyMode, strictTypedParsing, _valueBinders);
+        var bindingOptions = new EndpointBindingOptions(effectiveBodyMode, descriptor.StrictTypedParsing, _valueBinders);
 
         RequestDelegate handler = async context =>
         {
@@ -154,6 +209,14 @@ public sealed class EndpointGroup
                 // A body that cannot be read (an I/O fault, an unreadable stream) is an infrastructure
                 // failure, and its details must not leak into the response.
                 LogUnexpected(context, exception, typeof(TMessage));
+                if (context.Response.HasStarted)
+                {
+                    // Binding does not write, so this is only reachable through middleware or a
+                    // custom binder that did; the same rule as HandleFailureAsync applies.
+                    context.Abort();
+                    return;
+                }
+
                 await WriteProblemAsync(context,
                     EndpointProblem.General(StatusCodes.Status500InternalServerError, "Unexpected error occurred"));
                 return;
@@ -188,26 +251,26 @@ public sealed class EndpointGroup
             }
         };
 
-        var builder = _endpoints.MapMethods(pattern, [method], handler);
+        var builder = _endpoints.MapMethods(descriptor.Pattern, [descriptor.Method], handler);
 
         // An endpoint may describe a request schema it does not bind from the body: several existing
         // GET operations advertise their request shape in the document while binding from the query.
         // Declaring accepts is therefore what decides the OpenAPI request type, not the body mode.
-        var declaresRequest = accepts is not null || effectiveBodyMode is not EndpointBodyMode.None;
+        var declaresRequest = descriptor.Accepts is not null || effectiveBodyMode is not EndpointBodyMode.None;
         _convention(builder, new EndpointOperationContext
         {
             GroupName = Name,
-            Operation = operation,
-            Method = method,
-            Pattern = pattern,
+            Operation = descriptor.Operation,
+            Method = descriptor.Method,
+            Pattern = descriptor.Pattern,
             RequestType = declaresRequest ? typeof(TMessage) : null,
             ContractType = typeof(TMessage),
             ReadsBody = effectiveBodyMode is not EndpointBodyMode.None,
-            ResponseType = responseType,
-            Accepts = accepts,
-            SuccessStatus = successStatus,
-            DocumentedStatus = documentedStatus ?? successStatus,
-            DocumentAuthResponses = documentAuthResponses
+            ResponseType = descriptor.ResponseType,
+            Accepts = descriptor.Accepts,
+            SuccessStatus = descriptor.SuccessStatus,
+            DocumentedStatus = descriptor.DocumentedStatus ?? descriptor.SuccessStatus,
+            DocumentAuthResponses = descriptor.DocumentAuthResponses
         });
         return builder;
     }
@@ -233,16 +296,15 @@ public sealed class EndpointGroup
         ArgumentNullException.ThrowIfNull(bind);
         ArgumentNullException.ThrowIfNull(activate);
 
-        return MapOperation<TRequest>(
-            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
-            typeof(TResponse), options.SuccessStatus, options.DocumentedStatus,
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapOperation(
+            Describe(options, typeof(TResponse)),
             async (context, request, cancellationToken) =>
             {
                 var endpoint = activate(context.RequestServices);
                 endpoint.HttpContext = context;
-                await WriteJsonAsync(context, await handle(endpoint, request, cancellationToken), options.SuccessStatus);
+                await writer.WriteAsync(context, await handle(endpoint, request, cancellationToken), options.SuccessStatus);
             },
-            options.DocumentAuthResponses,
             bind);
     }
 
@@ -258,9 +320,8 @@ public sealed class EndpointGroup
         ArgumentNullException.ThrowIfNull(bind);
         ArgumentNullException.ThrowIfNull(activate);
 
-        return MapOperation<TRequest>(
-            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
-            null, StatusCodes.Status204NoContent, options.DocumentedStatus,
+        return MapOperation(
+            DescribeNoContent(options),
             async (context, request, cancellationToken) =>
             {
                 var endpoint = activate(context.RequestServices);
@@ -268,7 +329,6 @@ public sealed class EndpointGroup
                 await handle(endpoint, request, cancellationToken);
                 context.Response.StatusCode = StatusCodes.Status204NoContent;
             },
-            options.DocumentAuthResponses,
             bind);
     }
 
@@ -285,64 +345,138 @@ public sealed class EndpointGroup
         ArgumentNullException.ThrowIfNull(bind);
         ArgumentNullException.ThrowIfNull(activate);
 
-        return MapOperation<TRequest>(
-            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
-            typeof(TResponse), options.SuccessStatus, options.DocumentedStatus,
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapOperation(
+            Describe(options, typeof(TResponse)),
             async (context, request, cancellationToken) =>
             {
                 var endpoint = activate(context.RequestServices);
                 endpoint.HttpContext = context;
                 var result = await handle(endpoint, request, cancellationToken);
-                await WriteJsonAsync(context, result.Response, result.StatusCode);
+                await writer.WriteAsync(context, result.Response, result.StatusCode);
             },
-            options.DocumentAuthResponses,
             bind);
+    }
+
+    /// <summary>Maps a generated endpoint that binds no request contract.</summary>
+    /// <remarks>
+    /// The reflection-free path for <see cref="ApiEndpointWithoutRequest{TResponse}"/> classes:
+    /// nothing binds, so the generated slot supplies only the activator. The reflective mapper
+    /// produces identical endpoints by a slower route; the conformance suite asserts they agree.
+    /// </remarks>
+    public IEndpointConventionBuilder MapGeneratedUnbound<TEndpoint, TResponse>(
+        ApiEndpointOptions options,
+        Func<IServiceProvider, TEndpoint> activate,
+        Func<TEndpoint, CancellationToken, Task<TResponse>> handle)
+        where TEndpoint : ApiEndpointBase
+        where TResponse : notnull
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(activate);
+
+        return MapUnboundBody<TResponse>(options, async (context, cancellationToken) =>
+        {
+            var endpoint = activate(context.RequestServices);
+            endpoint.HttpContext = context;
+            return await handle(endpoint, cancellationToken);
+        });
+    }
+
+    /// <summary>Maps an options-described operation whose dispatch writes the response itself.</summary>
+    /// <remarks>
+    /// The raw path, shared by the reflective mapper and the generated registration for non-generic
+    /// <see cref="ApiEndpoint"/> classes. Nothing is bound and nothing is written on success — the
+    /// dispatch owns the response entirely — so no JSON response body is documented, and the
+    /// documented status is the runtime <see cref="ApiEndpointOptions.SuccessStatus"/> (200 unless
+    /// Configure changes it). The shared failure path — fault renderers, then exception translators,
+    /// then the sanitized 500 — applies when the dispatch throws.
+    /// </remarks>
+    public IEndpointConventionBuilder MapRaw(ApiEndpointOptions options, Func<HttpContext, Task> dispatch)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(dispatch);
+        return MapUnbound(Describe(options, responseType: null), dispatch);
     }
 
     /// <summary>Maps an options-described operation returning a body. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapBody<TRequest, TResponse>(
         ApiEndpointOptions options,
         Func<HttpContext, TRequest, CancellationToken, Task<TResponse>> dispatch)
-        where TResponse : notnull =>
-        MapOperation<TRequest>(            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
-            typeof(TResponse), options.SuccessStatus, options.DocumentedStatus,
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapOperation<TRequest>(
+            Describe(options, typeof(TResponse)),
             async (context, request, cancellationToken) =>
-                await WriteJsonAsync(context, await dispatch(context, request, cancellationToken), options.SuccessStatus), options.DocumentAuthResponses);
+                await writer.WriteAsync(context, await dispatch(context, request, cancellationToken), options.SuccessStatus));
+    }
 
     /// <summary>Maps an options-described operation with no request contract. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapUnboundBody<TResponse>(
         ApiEndpointOptions options,
         Func<HttpContext, CancellationToken, Task<TResponse>> dispatch)
-        where TResponse : notnull =>
-        MapUnbound(options.Method!, options.Route!, options.Operation!, typeof(TResponse), options.SuccessStatus,
-            async context => await WriteJsonAsync(context, await dispatch(context, context.RequestAborted), options.SuccessStatus));
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapUnbound(
+            Describe(options, typeof(TResponse)),
+            async context => await writer.WriteAsync(context, await dispatch(context, context.RequestAborted), options.SuccessStatus));
+    }
 
     /// <summary>Maps an options-described operation whose status travels with the result. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapResultBody<TRequest, TResponse>(
         ApiEndpointOptions options,
         Func<HttpContext, TRequest, CancellationToken, Task<EndpointResult<TResponse>>> dispatch)
-        where TResponse : notnull =>
-        MapOperation<TRequest>(            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
-            typeof(TResponse), options.SuccessStatus, options.DocumentedStatus,
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapOperation<TRequest>(
+            Describe(options, typeof(TResponse)),
             async (context, request, cancellationToken) =>
             {
                 var result = await dispatch(context, request, cancellationToken);
-                await WriteJsonAsync(context, result.Response, result.StatusCode);
-            },
-            options.DocumentAuthResponses);
+                await writer.WriteAsync(context, result.Response, result.StatusCode);
+            });
+    }
 
     /// <summary>Maps an options-described operation returning no content. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapNoContent<TRequest>(
         ApiEndpointOptions options,
         Func<HttpContext, TRequest, CancellationToken, Task> dispatch) =>
-        MapOperation<TRequest>(            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
-            null, StatusCodes.Status204NoContent, options.DocumentedStatus,
+        MapOperation<TRequest>(
+            DescribeNoContent(options),
             async (context, request, cancellationToken) =>
             {
                 await dispatch(context, request, cancellationToken);
                 context.Response.StatusCode = StatusCodes.Status204NoContent;
-            },
-            options.DocumentAuthResponses);
+            });
+
+    /// <summary>
+    /// The single translation from an endpoint's configured options to an operation descriptor.
+    /// Every options-described mapping path builds its descriptor here, so a setting added to
+    /// <see cref="ApiEndpointOptions"/> is forwarded — or deliberately not — in exactly one place.
+    /// </summary>
+    private static EndpointOperationDescriptor Describe(ApiEndpointOptions options, Type? responseType) =>
+        new()
+        {
+            Method = options.Method!,
+            Pattern = options.Route!,
+            Operation = options.Operation!,
+            BodyMode = options.BodyMode,
+            Accepts = options.Accepts,
+            ResponseType = responseType,
+            SuccessStatus = options.SuccessStatus,
+            DocumentedStatus = options.DocumentedStatus,
+            DocumentAuthResponses = options.DocumentAuthResponses,
+            StrictTypedParsing = options.StrictTypedParsing
+        };
+
+    /// <summary>
+    /// The no-content variant of <see cref="Describe"/>: a handler that returns nothing always
+    /// writes 204 and documents no response body, whatever the options say.
+    /// </summary>
+    private static EndpointOperationDescriptor DescribeNoContent(ApiEndpointOptions options) =>
+        Describe(options, responseType: null) with { SuccessStatus = StatusCodes.Status204NoContent };
 
     private static EndpointBodyMode DefaultBodyMode(string method) => method switch
     {
@@ -357,7 +491,9 @@ public sealed class EndpointGroup
             EndpointProblem.General(StatusCodes.Status415UnsupportedMediaType, binding.Message!),
         EndpointBindingFailure.MalformedBody =>
             EndpointProblem.General(StatusCodes.Status400BadRequest, binding.Message!, "serializerErrors"),
-        _ => EndpointProblem.General(StatusCodes.Status400BadRequest, binding.Message!)
+        // A failure that names its offending value — a strict-parsing rejection — is keyed by that
+        // value's wire name, so a caller can see which parameter to fix.
+        _ => EndpointProblem.General(StatusCodes.Status400BadRequest, binding.Message!, binding.Key ?? "generalErrors")
     };
 
     /// <summary>
@@ -366,6 +502,20 @@ public sealed class EndpointGroup
     /// </summary>
     private async Task HandleFailureAsync(HttpContext context, Exception exception, Type messageType)
     {
+        // A dispatch (or the serializer mid-write) that throws after the response started streaming
+        // cannot be answered with a problem document: setting the status or writing a body would
+        // throw an InvalidOperationException that replaces the real failure. Fault renderers and
+        // exception translators write responses, so they are not consulted either. Log the original
+        // exception and abort the connection so the truncated response is not mistaken for a
+        // complete one — the same choice ASP.NET Core's own exception middleware makes when it
+        // cannot re-execute the request.
+        if (context.Response.HasStarted)
+        {
+            LogUnexpected(context, exception, messageType);
+            context.Abort();
+            return;
+        }
+
         foreach (var renderer in FaultRenderers(context))
         {
             if (await renderer.TryWriteAsync(context, exception))
@@ -402,12 +552,13 @@ public sealed class EndpointGroup
         return null;
     }
 
+    /// <summary>
+    /// The no-contract pipeline: nothing binds, so only the route, response, and success status of
+    /// the descriptor apply. The documented status is always the runtime one — an operation without
+    /// a request contract has no result-carried status to diverge from.
+    /// </summary>
     private IEndpointConventionBuilder MapUnbound(
-        string method,
-        string pattern,
-        string operation,
-        Type? responseType,
-        int successStatus,
+        EndpointOperationDescriptor descriptor,
         Func<HttpContext, Task> dispatch)
     {
         RequestDelegate handler = async context =>
@@ -426,16 +577,16 @@ public sealed class EndpointGroup
             }
         };
 
-        var builder = _endpoints.MapMethods(pattern, [method], handler);
+        var builder = _endpoints.MapMethods(descriptor.Pattern, [descriptor.Method], handler);
         _convention(builder, new EndpointOperationContext
         {
             GroupName = Name,
-            Operation = operation,
-            Method = method,
-            Pattern = pattern,
-            ResponseType = responseType,
-            SuccessStatus = successStatus,
-            DocumentedStatus = successStatus
+            Operation = descriptor.Operation,
+            Method = descriptor.Method,
+            Pattern = descriptor.Pattern,
+            ResponseType = descriptor.ResponseType,
+            SuccessStatus = descriptor.SuccessStatus,
+            DocumentedStatus = descriptor.SuccessStatus
         });
         return builder;
     }

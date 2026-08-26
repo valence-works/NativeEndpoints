@@ -8,20 +8,103 @@ Two features the first real consumer needed, found by starting the migration rat
 parse, with a 400 naming it, instead of falling back to the parameter's default. Opt-in, because
 turning it on changes what an existing API returns. It also closes a hole in this library's own
 argument: the binder promised nothing misbinds silently, and then silently defaulted an unreadable
-number.
+number. Absence keeps its documented meaning on both binders: a nullable reference-type
+`IParsable<T>` member the caller omitted binds null even under strict parsing (the generated path
+gains the dedicated `EndpointValue.ParsableOrDefault<T>` converter for it, instead of `Parsable<T>`
+rejecting the absence), and a constructor-parameter default binds on absence whether or not the
+member declares a `[From...]` source — `[FromQuery] int Page = 1` now agrees with `int Page = 1`,
+lenient and strict alike. Contracts declaring constructor-parameter defaults are registered through
+the reflective mapper by the generated `Map()`, which honors them, rather than being emitted with
+the defaults silently dropped.
 
 **Explicit nulls are distinguishable from absent values.** The binder records which properties a
 request body actually contained, so a member sent as `null` stays null while an omitted one falls
 through to the query string. Previously both looked the same.
 
+**The write-your-own-response shape actually exists.** The docs promised five base types; the fifth
+was documented as deriving `ApiEndpointBase` directly, which the reflective scan rejected at startup
+and the generator silently omitted. The shape is now the non-generic `ApiEndpoint`:
+`Task HandleAsync(CancellationToken)`, with the handler writing the response through `HttpContext`
+itself — nothing is bound, nothing is written on success, no JSON response body is documented, and
+the shared failure path (fault renderers, translators, sanitized 500) still applies. Both mapping
+paths support it, via the new public `EndpointGroup.MapRaw`. A class that still derives
+`ApiEndpointBase` directly gets diagnostic `NE0005` at build time, and the reflective scan's error
+now names the offending type and the five supported bases instead of failing opaquely.
+
+### Performance
+
+- The per-request hot path sheds work it can do once per endpoint instead, with no observable
+  behaviour change — the conformance suite and the full test suite pin that responses are
+  identical. Success responses resolve the response type's `JsonTypeInfo` once per endpoint and
+  write through `WriteAsJsonAsync` rather than allocating a `Results.Json` result per response;
+  the group's exact configured Content-Type and status semantics are preserved, and a null or
+  runtime-divergent value keeps the original path. Route and query lookups use the collections'
+  own case-insensitive `TryGetValue` instead of scanning every entry per parameter. The reflective
+  binder memoizes a per-contract binding plan — constructor, parameter attributes, defaults, and
+  property getters — in its existing weak-keyed cache instead of re-reflecting per request. When a
+  contract proves no member can fall back from the body to the query (every member binds from a
+  route value or a declared source), the body streams through the serializer in one pass instead
+  of buffering a `JsonDocument` to record supplied properties: the new
+  `EndpointRequestBinder.ReadBodyAsync` overload takes `needsSuppliedProperties`, and both binders
+  pass it from what they know statically. Generated binders also hoist their per-element
+  collection converters into per-endpoint delegates instead of allocating one per request.
+
 ### Breaking
 
+- `EndpointGroup.MapOperation<TMessage>` takes an `EndpointOperationDescriptor` record rather than
+  thirteen positional parameters; the old overload is gone. Every typed Map method now builds its
+  descriptor from `ApiEndpointOptions` in one place, so a new option can no longer be silently
+  dropped by a forwarding overload — which is exactly how `StrictTypedParsing` failed to apply in
+  preview.1. `MapHandler` and the generated `MapGenerated*` entry points are unchanged.
 - `EndpointBinder<T>` and `EndpointRequestBinder.BindAsync` take an `EndpointBindingOptions` record
   rather than loose parameters. Binding has gained settings twice now; a record stops each addition
   being a signature break.
 - `EndpointRequestBinder.ReadBodyAsync` returns `EndpointBodyResult<T>`, which carries the supplied
   property names alongside the body.
 - Regenerate: binders emitted by preview.1 do not match the new delegate shape.
+
+### Changed
+
+- A repeated query key bound to a scalar (`?page=1&page=2` into an `int`) binds the first value.
+  Previously the values were comma-joined ("1,2"), which failed to parse and — under the lenient
+  default — silently bound the type's zero, contradicting the promise that nothing misbinds
+  silently; under strict parsing the join was rejected naming "1,2", a value the caller never
+  sent. A single value binds exactly as before, and both binders agree — the conformance suite
+  pins it. For comparison, minimal APIs comma-join here too, so a typed scalar answers a bare 400
+  and a `string` binds "1,2" (verified against a TestHost app on .NET 10); that join is an
+  accident of `StringValues.ToString()`, not behavior worth matching. Multi-valued headers keep
+  the comma-join deliberately: HTTP defines a repeated field as one comma-separated field, so the
+  join is the header's value.
+
+### Fixed
+
+- A routed `ApiEndpointWithoutRequest<TResponse>` endpoint made the generator emit a registration
+  that did not compile. The shape now has a first-class generated path through the new public
+  `EndpointGroup.MapGeneratedUnbound`, producing the same endpoint as the reflective mapper.
+- A host that never called `AddNativeEndpoints()` now fails at `MapEndpointGroup` time with the
+  remedy in the message, instead of surfacing on the first binding failure or handler exception at
+  runtime — where the unresolvable `IEndpointProblemWriter` turned the caller's real 400 into an
+  opaque 500. The check accepts either the unkeyed registration or a writer keyed by the group's
+  own name — exactly the pair the failure path resolves per request — so a host composing only
+  keyed per-group writers keeps mapping as it always did. The registration is probed through
+  `IServiceProviderIsService` rather than resolved, so a scoped writer — a legitimate lifetime for
+  a request-coupled writer — passes the check without being constructed from the root provider,
+  which scope validation would rightly refuse; a container that cannot answer the probe skips the
+  check rather than guessing.
+- The generated binder for a property-bound contract — a parameterless constructor with settable
+  properties — constructed an empty instance and silently discarded every deserialized body value,
+  answering the type's defaults where the reflective binder answered the caller's payload. Such
+  contracts are no longer generated: the generated `Map()` registers them through the reflective
+  mapper, whose property-assignment path binds them correctly, and the conformance suite now posts
+  a body through both mapping paths to pin it.
+- A handler (or the serializer mid-write) that throws after the response has started streaming no
+  longer triggers a secondary `InvalidOperationException` from the problem writer setting the
+  status on a started response. The pipeline logs the original exception and aborts the connection
+  — the same choice ASP.NET Core's exception middleware makes when it cannot re-execute — so the
+  truncated response is not mistaken for a complete one. Fault renderers and exception translators
+  are consulted only while the response has not started, since they write responses.
+- `MapEndpointGroup` is marked `NoInlining` so the default group name, taken from
+  `Assembly.GetCallingAssembly()`, cannot misreport the caller under JIT inlining.
 
 ## 1.0.0-preview.1
 

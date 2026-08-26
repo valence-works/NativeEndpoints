@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -32,6 +33,10 @@ public static class EndpointGroupRouteBuilderExtensions
         Justification = "JsonSerializerOptions.Web is only used when no JsonSerializerContext was supplied. A trimmed or AOT host supplies one.")]
     [UnconditionalSuppressMessage("AOT", "IL3050",
         Justification = "JsonSerializerOptions.Web is only used when no JsonSerializerContext was supplied. A trimmed or AOT host supplies one.")]
+    // NoInlining because the default group name comes from Assembly.GetCallingAssembly(): if the
+    // JIT inlined this method into its caller, the "calling assembly" would be whatever assembly
+    // the caller was itself inlined into, and the group would silently take the wrong name.
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static EndpointGroup MapEndpointGroup(
         this IEndpointRouteBuilder endpoints,
         string? name = null,
@@ -42,9 +47,30 @@ public static class EndpointGroupRouteBuilderExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(jsonContentType);
 
         var services = endpoints.ServiceProvider;
+
         var groupName = name
             ?? Assembly.GetCallingAssembly().GetName().Name
             ?? throw new InvalidOperationException("The calling assembly has no simple name; pass a group name explicitly.");
+
+        // Fail at mapping time when the pipeline's services were never registered. Without this
+        // check the omission only surfaces on the first binding failure or handler exception, where
+        // WriteProblemAsync cannot resolve a problem writer and the caller's real 400 becomes an
+        // opaque 500. Either registration satisfies the check — the unkeyed writer that
+        // AddNativeEndpoints installs, or one keyed by this group's name — because those are
+        // exactly the two the failure path consults per request; a host composing only keyed
+        // per-group writers is a working configuration, not a misconfiguration.
+        // Probed without instantiating: a host may legitimately register a scoped writer, and
+        // resolving that from the root provider would itself throw under scope validation. A
+        // container that cannot answer the question skips the check rather than guessing.
+        var registrationProbe = services.GetService<IServiceProviderIsService>();
+        if (registrationProbe is not null &&
+            !registrationProbe.IsService(typeof(IEndpointProblemWriter)) &&
+            services.GetService<IServiceProviderIsKeyedService>()?.IsKeyedService(typeof(IEndpointProblemWriter), groupName) is not true)
+        {
+            throw new InvalidOperationException(
+                "No IEndpointProblemWriter is registered. " +
+                "Call services.AddNativeEndpoints() before mapping an endpoint group.");
+        }
 
         var jsonOptions = jsonContext?.Options
             ?? services.GetService<IOptions<JsonOptions>>()?.Value.SerializerOptions

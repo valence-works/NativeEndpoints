@@ -28,6 +28,20 @@ public class GeneratedRegistrationTests
     }
 
     [Fact]
+    public void Not_generatable_endpoints_still_register_through_the_reflective_fallback()
+    {
+        var names = Map(group => group.Map(routePrefix: "/g"));
+
+        // These contracts are deliberately not generatable — a constructor-parameter default and a
+        // property-bound (parameterless-constructor) contract — so the generated Map() must emit
+        // the reflective MapEndpoint fallback for them rather than dropping them.
+        Assert.Contains("Gen_DefaultedEndpoint", names);
+        Assert.Contains("Gen_DeclaredDefaultEndpoint", names);
+        Assert.Contains("Gen_StrictDeclaredDefaultEndpoint", names);
+        Assert.Contains("Gen_WidgetFormEndpoint", names);
+    }
+
+    [Fact]
     public void Generated_registration_names_endpoints_the_same_way()
     {
         var names = Map(group => group.Map(routePrefix: "/g"));

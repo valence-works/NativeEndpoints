@@ -43,4 +43,13 @@ internal static class Diagnostics
         Category,
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
+
+    internal static readonly DiagnosticDescriptor UnmappableBase = new(
+        "NE0005",
+        "Endpoint derives from ApiEndpointBase directly",
+        "Endpoint '{0}' derives ApiEndpointBase directly and cannot be mapped. Derive the non-generic ApiEndpoint to write the response yourself, or one of the four contract shapes.",
+        Category,
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Every mapper dispatches through a handler method a base type declares, and ApiEndpointBase declares none. The generated registration excludes such a class, and the reflective scan throws for it at startup.");
 }

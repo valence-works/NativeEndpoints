@@ -28,22 +28,40 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             .Select(static (model, _) => model!);
 
         // Types the assembly declares a runtime value binder for. The generator cannot see the
-        // registration call itself, so the attribute is how intent reaches the build.
+        // registration call itself, so the attribute is how intent reaches the build. Sorted and
+        // deduplicated into an EquatableArray so an unchanged declaration set compares equal and
+        // keeps the cached outputs alive.
         var declared = context.CompilationProvider.Select(static (compilation, _) =>
-            compilation.Assembly.GetAttributes()
+            (EquatableArray<string>)compilation.Assembly.GetAttributes()
                 .Where(attribute => attribute.AttributeClass?.ToDisplayString() == "NativeEndpoints.EndpointValueBinderAttribute")
                 .Select(attribute => attribute.ConstructorArguments.Length == 1 ? attribute.ConstructorArguments[0].Value as INamedTypeSymbol : null)
                 .Where(symbol => symbol is not null)
                 .Select(symbol => symbol!.ToDisplayString())
-                .ToImmutableHashSet());
+                .Distinct()
+                .OrderBy(name => name, System.StringComparer.Ordinal)
+                .ToImmutableArray());
 
-        var collected = endpoints.Collect().Combine(context.CompilationProvider).Combine(declared);
+        // Diagnostics run per endpoint, so an edit inside one class re-checks that class alone.
+        context.RegisterSourceOutput(endpoints.Combine(declared), static (production, source) =>
+            Report(production, source.Left, source.Right));
+
+        // Emission needs only the assembly name from the compilation. Combining the whole
+        // CompilationProvider would re-run this output on every keystroke in the consuming project;
+        // the name is a value-equatable string that almost never changes.
+        var assemblyName = context.CompilationProvider.Select(static (compilation, _) => compilation.AssemblyName);
+
+        // Emission never reads Configure's diagnostic positions, but they participate in the
+        // model's equality, so a line shift inside a Configure body would re-run emission for a
+        // byte-identical file. Strip them from the emission input; the diagnostics node above
+        // keeps the full model, so the reported locations stay exact.
+        var collected = endpoints
+            .Select(static (model, _) => model with { ConfigureReads = default })
+            .Collect()
+            .Combine(assemblyName);
 
         context.RegisterSourceOutput(collected, static (production, source) =>
         {
-            var ((models, compilation), boundTypes) = source;
-            foreach (var model in models)
-                Report(production, model, boundTypes);
+            var (models, assemblyName) = source;
 
             var mappable = models
                 .Where(model => model.HasRoute && model.Shape is not EndpointShape.Unsupported)
@@ -55,7 +73,7 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
 
             production.AddSource(
                 "NativeEndpointsRegistration.g.cs",
-                SourceText(compilation.AssemblyName ?? "Generated", mappable));
+                SourceText(assemblyName ?? "Generated", mappable));
         });
     }
 
@@ -71,6 +89,22 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
         var pattern = EndpointSymbols.RoutePattern(type);
         var routeKeys = RouteKeys(pattern);
 
+        // A request contract whose single public constructor takes no parameters is bound by
+        // property assignment: the reflective BindProperties keeps the deserialized body and lays
+        // route, query, and declared sources over it. The emitter's `new TRequest()` cannot do
+        // that — it would silently discard every deserialized body value — so these fall back to
+        // the reflective mapper. Only a real request contract triggers this: the no-request shapes
+        // (ResponseOnly, Raw) have no contract at all (ContractName is null) and stay generatable.
+        var propertyBound = contract.Name is not null && contract.ConstructorCount == 1 &&
+                            contract.Parameters.Length == 0;
+
+        // A constructor-parameter default (`int Page = 3`) is a compile-time constant the emitter
+        // would have to re-literalize correctly for every supported type (enums, decimals, nested
+        // nullables, ...); getting one wrong would misbind silently. The reflective binder reads
+        // ParameterInfo.DefaultValue at bind time and is correct today, so any defaulted parameter
+        // sends the whole contract down the reflective path instead.
+        var hasDefaultedParameter = contract.Parameters.Any(parameter => parameter.HasDefaultValue);
+
         // Generatable only when everything is statically knowable: one constructor on both the
         // endpoint and its contract, and a conversion for every member the binder must produce from
         // a string. Anything else falls back to the reflective path, which handles it correctly.
@@ -78,6 +112,8 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             shape is not EndpointShape.Unsupported &&
             pattern is not null &&
             contract.ConstructorCount == 1 &&
+            !propertyBound &&
+            !hasDefaultedParameter &&
             EndpointSymbols.HasSingleConstructor(type) &&
             contract.Parameters.All(parameter => IsEmittable(parameter, routeKeys));
 
@@ -143,7 +179,16 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             };
 
             if (reads_state && seen.Add(symbol!.Name))
-                reads.Add(new ConfigureRead(symbol.Name, identifier.GetLocation()));
+            {
+                // Captured as raw data rather than the Location itself, which holds its syntax tree
+                // and would keep the model from ever comparing equal across edits.
+                var location = identifier.GetLocation();
+                reads.Add(new ConfigureRead(
+                    symbol.Name,
+                    location.SourceTree?.FilePath ?? string.Empty,
+                    location.SourceSpan,
+                    location.GetLineSpan().Span));
+            }
         }
 
         return reads.ToImmutable();
@@ -250,7 +295,8 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             isList,
             source,
             key,
-            parameter.Type is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated });
+            parameter.Type is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated },
+            parameter.HasExplicitDefaultValue);
     }
 
     private static bool IsBindFrom(INamedTypeSymbol? attributeClass)
@@ -267,8 +313,11 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
     private static void Report(
         SourceProductionContext production,
         EndpointModel model,
-        ImmutableHashSet<string> boundTypes)
+        EquatableArray<string> boundTypes)
     {
+        if (model.Shape is EndpointShape.Unsupported)
+            production.ReportDiagnostic(Diagnostic.Create(Diagnostics.UnmappableBase, Location.None, model.DisplayName));
+
         if (!model.HasRoute && model.Shape is not EndpointShape.Unsupported)
             production.ReportDiagnostic(Diagnostic.Create(Diagnostics.MissingRoute, Location.None, model.DisplayName));
 

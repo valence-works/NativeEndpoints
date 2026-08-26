@@ -16,11 +16,17 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/NativeEndpoints/NativeEndpoints.csproj" />
+    <ProjectReference Include="../../src/NativeEndpoints.OpenApi/NativeEndpoints.OpenApi.csproj" />
     <ProjectReference Include="../../src/NativeEndpoints.Testing/NativeEndpoints.Testing.csproj" />
 
-    <!-- The generator runs over this project's own endpoint fixtures, so its output is under test. -->
+    <!--
+      The generator runs over this project's own endpoint fixtures, so its output is under test.
+      Its assembly is also referenced directly (ReferenceOutputAssembly defaults to true) so tests
+      can drive it with a GeneratorDriver and assert its diagnostics: an unmappable fixture class
+      cannot live in this assembly, because the reflective-scan tests map the whole assembly and
+      would then throw at startup.
+    -->
     <ProjectReference Include="../../src/NativeEndpoints.Generator/NativeEndpoints.Generator.csproj"
-                      ReferenceOutputAssembly="false"
                       OutputItemType="Analyzer" />
   </ItemGroup>
 

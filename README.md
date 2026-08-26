@@ -108,7 +108,7 @@ than stamped onto public endpoints that can never return it.
 | `ApiEndpoint<TRequest>` | A request in, `204 No Content` out |
 | `ApiEndpointWithoutRequest<TResponse>` | No contract, a response body out |
 | `ApiEndpointWithResult<TRequest, TResponse>` | The status code is decided by the handler |
-| `ApiEndpointBase` | Write the response yourself |
+| `ApiEndpoint` | Write the response yourself |
 
 `ApiEndpointWithResult` covers operations whose status depends on what happened:
 
@@ -150,6 +150,10 @@ builder.Services.AddNativeEndpoints(o => o.ValueBinders.Add<Money>(Money.TryPars
 Body handling is explicit per endpoint via `options.BodyMode`: `None`, `Optional`, `Required`, or
 `RequiredWithContentType`, the last rejecting a non-JSON content type with a bare `415` before the
 body is read.
+
+A typed value the caller sent but the binder cannot read falls back to the parameter's default,
+which is what most published contracts already do. Opt in to `options.StrictTypedParsing` per
+endpoint to report it as a `400` naming the value instead — the better setting for a new endpoint.
 
 This binder is deliberately narrower than `RequestDelegateFactory`'s. That is a design position, not
 a gap: predictable binding you can hold in your head, and a loud failure instead of a quiet one.
@@ -247,6 +251,11 @@ collections, **0 of 3 contexts were collected** with FastEndpoints 7.2.0, and re
 accumulated across disposed hosts. That result isolates a composition-level retention problem; it
 does not attribute it to a specific static root, and it is not a claim about FastEndpoints in any
 other respect. It is the reason this library exists.
+
+On speed: [`benchmarks/`](benchmarks) holds a BenchmarkDotNet suite comparing a raw minimal API,
+NativeEndpoints through both mapping paths, and FastEndpoints on the same two operations, in
+process. Run it yourself rather than trusting a table; the in-repo runs show the generated path at
+parity with a hand-written minimal API on both time and allocations.
 
 ## What it does not do
 

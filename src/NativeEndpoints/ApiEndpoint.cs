@@ -66,6 +66,21 @@ public abstract class ApiEndpointWithResult<TRequest, TResponse> : ApiEndpointBa
     public abstract Task<EndpointResult<TResponse>> HandleAsync(TRequest request, CancellationToken cancellationToken);
 }
 
+/// <summary>An endpoint that writes its own response through <see cref="ApiEndpointBase.HttpContext"/>.</summary>
+/// <remarks>
+/// For responses that are not JSON at all: a file stream, a redirect, an event stream. Nothing is
+/// bound and nothing is written on success — the pipeline sets
+/// <see cref="ApiEndpointBase.HttpContext"/> before dispatch and the handler owns the response from
+/// there, including its status code and content type. The shared failure path still applies when the
+/// handler throws: module-owned fault renderers first, then exception translators, then the
+/// sanitized generic 500, exactly as for the contract-bound shapes.
+/// </remarks>
+public abstract class ApiEndpoint : ApiEndpointBase
+{
+    /// <summary>Handles the request, writing the response through <see cref="ApiEndpointBase.HttpContext"/>.</summary>
+    public abstract Task HandleAsync(CancellationToken cancellationToken);
+}
+
 /// <summary>The endpoint definition an <see cref="ApiEndpointBase.Configure"/> override refines.</summary>
 public sealed class ApiEndpointOptions
 {
@@ -87,8 +102,8 @@ public sealed class ApiEndpointOptions
     public EndpointBodyMode? BodyMode { get; set; }
 
     /// <summary>
-    /// Rejects a typed route or query value that does not parse, with a 400 naming it, rather than
-    /// falling back to the parameter's default.
+    /// Rejects a typed route, query, header, or claim value that does not parse, with a 400 naming
+    /// it, rather than falling back to the parameter's default.
     /// </summary>
     /// <remarks>
     /// Opt-in. The lenient fallback is what most published contracts already do, so turning this on
