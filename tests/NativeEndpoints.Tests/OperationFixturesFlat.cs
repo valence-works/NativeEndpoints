@@ -35,3 +35,29 @@ public sealed class StrictEndpoint : ApiEndpoint<StrictQuery, StrictView>
     public override Task<StrictView> HandleAsync(StrictQuery request, CancellationToken cancellationToken) =>
         Task.FromResult(new StrictView(request.Page, request.Filter?.ToString(), request.Term));
 }
+
+/// <summary>
+/// A registered value binder type and a collection, so strict parsing covers the converter paths
+/// the built-in types do not reach.
+/// </summary>
+public sealed record ItemsQuery(NativeEndpoints.Tests.Money Price, int[] Ids);
+
+/// <summary>The response, echoed so a divergence shows up as different bytes.</summary>
+public sealed record ItemsView(decimal Price, int[] Ids);
+
+[NativeEndpoints.Get("strict-items")]
+public sealed class StrictItemsEndpoint : ApiEndpoint<ItemsQuery, ItemsView>
+{
+    public override void Configure(ApiEndpointOptions options) => options.StrictTypedParsing = true;
+
+    public override Task<ItemsView> HandleAsync(ItemsQuery request, CancellationToken cancellationToken) =>
+        Task.FromResult(new ItemsView(request.Price.Amount, request.Ids));
+}
+
+/// <summary>The same contract without strict parsing, pinning the lenient fallbacks.</summary>
+[NativeEndpoints.Get("lenient-items")]
+public sealed class LenientItemsEndpoint : ApiEndpoint<ItemsQuery, ItemsView>
+{
+    public override Task<ItemsView> HandleAsync(ItemsQuery request, CancellationToken cancellationToken) =>
+        Task.FromResult(new ItemsView(request.Price.Amount, request.Ids));
+}

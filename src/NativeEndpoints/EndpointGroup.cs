@@ -243,7 +243,8 @@ public sealed class EndpointGroup
                 await WriteJsonAsync(context, await handle(endpoint, request, cancellationToken), options.SuccessStatus);
             },
             options.DocumentAuthResponses,
-            bind);
+            bind,
+            options.StrictTypedParsing);
     }
 
     /// <summary>Maps a generated endpoint that returns no content.</summary>
@@ -269,7 +270,8 @@ public sealed class EndpointGroup
                 context.Response.StatusCode = StatusCodes.Status204NoContent;
             },
             options.DocumentAuthResponses,
-            bind);
+            bind,
+            options.StrictTypedParsing);
     }
 
     /// <summary>Maps a generated endpoint whose status travels with its result.</summary>
@@ -296,7 +298,8 @@ public sealed class EndpointGroup
                 await WriteJsonAsync(context, result.Response, result.StatusCode);
             },
             options.DocumentAuthResponses,
-            bind);
+            bind,
+            options.StrictTypedParsing);
     }
 
     /// <summary>Maps an options-described operation returning a body. Used by the endpoint-class mapper.</summary>
@@ -307,7 +310,8 @@ public sealed class EndpointGroup
         MapOperation<TRequest>(            options.Method!, options.Route!, options.Operation!, options.BodyMode, options.Accepts,
             typeof(TResponse), options.SuccessStatus, options.DocumentedStatus,
             async (context, request, cancellationToken) =>
-                await WriteJsonAsync(context, await dispatch(context, request, cancellationToken), options.SuccessStatus), options.DocumentAuthResponses);
+                await WriteJsonAsync(context, await dispatch(context, request, cancellationToken), options.SuccessStatus), options.DocumentAuthResponses,
+            strictTypedParsing: options.StrictTypedParsing);
 
     /// <summary>Maps an options-described operation with no request contract. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapUnboundBody<TResponse>(
@@ -329,7 +333,8 @@ public sealed class EndpointGroup
                 var result = await dispatch(context, request, cancellationToken);
                 await WriteJsonAsync(context, result.Response, result.StatusCode);
             },
-            options.DocumentAuthResponses);
+            options.DocumentAuthResponses,
+            strictTypedParsing: options.StrictTypedParsing);
 
     /// <summary>Maps an options-described operation returning no content. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapNoContent<TRequest>(
@@ -342,7 +347,8 @@ public sealed class EndpointGroup
                 await dispatch(context, request, cancellationToken);
                 context.Response.StatusCode = StatusCodes.Status204NoContent;
             },
-            options.DocumentAuthResponses);
+            options.DocumentAuthResponses,
+            strictTypedParsing: options.StrictTypedParsing);
 
     private static EndpointBodyMode DefaultBodyMode(string method) => method switch
     {
@@ -357,7 +363,9 @@ public sealed class EndpointGroup
             EndpointProblem.General(StatusCodes.Status415UnsupportedMediaType, binding.Message!),
         EndpointBindingFailure.MalformedBody =>
             EndpointProblem.General(StatusCodes.Status400BadRequest, binding.Message!, "serializerErrors"),
-        _ => EndpointProblem.General(StatusCodes.Status400BadRequest, binding.Message!)
+        // A failure that names its offending value — a strict-parsing rejection — is keyed by that
+        // value's wire name, so a caller can see which parameter to fix.
+        _ => EndpointProblem.General(StatusCodes.Status400BadRequest, binding.Message!, binding.Key ?? "generalErrors")
     };
 
     /// <summary>

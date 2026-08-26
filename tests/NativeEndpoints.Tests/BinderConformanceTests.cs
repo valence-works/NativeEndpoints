@@ -48,6 +48,20 @@ public class BinderConformanceTests : IAsyncDisposable
         "/strict?page=7&filter=not-a-guid",
         "/strict?page=7&filter=11111111-2222-3333-4444-555555555555&term=x",
         "/strict?page=",
+        "/strict?page=7&filter=",
+        "/strict",
+
+        // Strict parsing over a registered value binder and collection elements, and the same
+        // requests through the lenient contract, so both the failure and the fallback are compared.
+        "/strict-items?price=12.50&ids=1&ids=2",
+        "/strict-items?price=notmoney&ids=1",
+        "/strict-items?price=12.50&ids=1&ids=notanumber",
+        "/strict-items?price=12.50&ids=",
+        "/strict-items?price=",
+        "/strict-items",
+        "/lenient-items?price=notmoney&ids=1&ids=notanumber",
+        "/lenient-items?price=&ids=",
+        "/lenient-items",
     ];
 
     [Theory]
@@ -79,6 +93,11 @@ public class BinderConformanceTests : IAsyncDisposable
                 {
                     services.AddRouting();
                     services.AddNativeEndpoints(o => o.ValueBinders.Add<Money>(Money.TryParse));
+                    // The default problem writer stamps a per-request traceId, so two identical
+                    // binders would still produce different bytes on a 400. Stripped here so the
+                    // comparison sees only what the binders decided.
+                    services.AddProblemDetails(options => options.CustomizeProblemDetails =
+                        context => context.ProblemDetails.Extensions.Remove("traceId"));
                     services.AddAuthentication("test")
                         .AddScheme<AuthenticationSchemeOptions, ConformanceAuth>("test", null);
                     services.AddAuthorization();

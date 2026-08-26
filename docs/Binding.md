@@ -133,15 +133,21 @@ public override void Configure(ApiEndpointOptions options) => options.StrictType
 Now the same request is a `400` naming the value:
 
 ```json
-{ "generalErrors": ["Value [notanumber] is not valid for a [Int32] property!"] }
+{ "page": ["Value [notanumber] is not valid for a [Int32] property!"] }
 ```
 
 The reported key is the wire name the query string documents (`page`), not the constructor parameter
 it binds into (`Page`).
 
+Strictness follows every conversion: a registered value binder that cannot read its value and a
+collection element that does not parse are rejected the same way a scalar `int` is.
+
 Absent is not the same as unreadable. A nullable member the caller omitted is simply null, strict or
 not. A non-nullable typed member with no value is a failure under strict parsing, because the caller
-was required to send something readable and did not.
+was required to send something readable and did not. A blank value (`?page=`) is not absent — the
+caller did send it — so it is rejected even for a nullable member. Types read only through a
+registered parser are the exception on absence: an absent value binds the type's default, and only a
+value the caller actually sent can fail.
 
 For a new endpoint this is the better setting. It is opt-in only because turning it on changes what
 an existing API returns.

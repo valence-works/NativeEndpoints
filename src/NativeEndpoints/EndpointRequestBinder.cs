@@ -267,7 +267,7 @@ public static class EndpointRequestBinder
                 continue;
             }
 
-            if (TryGetCollection(query, name, parameter.ParameterType, valueBinders, out var collection))
+            if (TryGetCollection(query, name, parameter.ParameterType, valueBinders, strict, out var collection))
             {
                 arguments[index] = collection;
                 continue;
@@ -281,7 +281,7 @@ public static class EndpointRequestBinder
 
             arguments[index] = parameter.HasDefaultValue
                 ? parameter.DefaultValue
-                : DefaultOf(parameter.ParameterType);
+                : AbsentValue(parameter.ParameterType, name, strict);
         }
 
         return (T)constructor.Invoke(arguments);
@@ -303,7 +303,7 @@ public static class EndpointRequestBinder
                 property.SetValue(instance, BindDeclared(context, declared, property.Name, property.PropertyType, valueBinders, strict));
             else if (TryGetRouteValue(routeValues, property.Name, out var routeValue))
                 property.SetValue(instance, Convert(routeValue, property.PropertyType, property.Name, valueBinders, strict));
-            else if (!SuppliedByBody(supplied, property.Name) && TryGetCollection(query, property.Name, property.PropertyType, valueBinders, out var collection))
+            else if (!SuppliedByBody(supplied, property.Name) && TryGetCollection(query, property.Name, property.PropertyType, valueBinders, strict, out var collection))
                 property.SetValue(instance, collection);
             else if (!SuppliedByBody(supplied, property.Name) && TryGetQueryValue(query, property.Name, out var queryValue))
                 property.SetValue(instance, Convert(queryValue, property.PropertyType, property.Name, valueBinders, strict));
@@ -393,10 +393,10 @@ public static class EndpointRequestBinder
         // A registered parser wins over the built-in fallbacks, so a host can override how one of
         // its own types is read without forking the binder.
         if (valueBinders is not null && valueBinders.Handles(underlying))
-            return valueBinders.TryParse(underlying, value, CultureInfo.InvariantCulture, out var custom) ? custom : DefaultOf(targetType);
+            return valueBinders.TryParse(underlying, value, CultureInfo.InvariantCulture, out var custom) ? custom : Fallback(value, targetType, underlying, parameterName, strict);
 
         if (typeof(IParsable<>).MakeGenericType(underlying).IsAssignableFrom(underlying))
-            return TryParsable(underlying, value, out var parsable) ? parsable : DefaultOf(targetType);
+            return TryParsable(underlying, value, out var parsable) ? parsable : Fallback(value, targetType, underlying, parameterName, strict);
 
         throw new InvalidOperationException(
             $"Request parameter '{parameterName}' has unsupported type '{targetType.FullName}'. " +
@@ -419,20 +419,20 @@ public static class EndpointRequestBinder
             case EndpointBindingSource.Route:
                 return TryGetRouteValue(context.Request.RouteValues, key, out var route)
                     ? Convert(route, targetType, memberName, valueBinders, strict)
-                    : DefaultOf(targetType);
+                    : AbsentValue(targetType, memberName, strict);
 
             case EndpointBindingSource.Query:
-                if (TryGetCollection(context.Request.Query, key, targetType, valueBinders, out var many))
+                if (TryGetCollection(context.Request.Query, key, targetType, valueBinders, strict, out var many))
                     return many;
                 return TryGetQueryValue(context.Request.Query, key, out var single)
                     ? Convert(single, targetType, memberName, valueBinders, strict)
-                    : DefaultOf(targetType);
+                    : AbsentValue(targetType, memberName, strict);
 
             case EndpointBindingSource.Header:
                 if (!context.Request.Headers.TryGetValue(key, out var header))
-                    return DefaultOf(targetType);
+                    return AbsentValue(targetType, memberName, strict);
                 return ElementType(targetType) is not null
-                    ? BuildCollection(targetType, header!, memberName, valueBinders)
+                    ? BuildCollection(targetType, header!, memberName, valueBinders, strict)
                     : Convert(header.ToString(), targetType, memberName, valueBinders, strict);
 
             case EndpointBindingSource.Claim:
@@ -440,9 +440,9 @@ public static class EndpointRequestBinder
                 // binding failure. Authorization decides whether absence is allowed.
                 var claims = context.User?.FindAll(key).Select(claim => claim.Value).ToArray() ?? [];
                 if (ElementType(targetType) is not null)
-                    return BuildCollection(targetType, claims, memberName, valueBinders);
+                    return BuildCollection(targetType, claims, memberName, valueBinders, strict);
                 return claims.Length == 0
-                    ? DefaultOf(targetType)
+                    ? AbsentValue(targetType, memberName, strict)
                     : Convert(claims[0], targetType, memberName, valueBinders, strict);
 
             default:
@@ -471,6 +471,7 @@ public static class EndpointRequestBinder
         string name,
         Type targetType,
         EndpointValueBinders? valueBinders,
+        bool strict,
         out object? value)
     {
         value = null;
@@ -482,13 +483,13 @@ public static class EndpointRequestBinder
             if (!string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            value = BuildCollection(targetType, entry.Value!, name, valueBinders);
+            value = BuildCollection(targetType, entry.Value!, name, valueBinders, strict);
             return true;
         }
 
         // A collection parameter with no values present binds empty rather than null, so a handler
         // can enumerate it without a null check.
-        value = BuildCollection(targetType, [], name, valueBinders);
+        value = BuildCollection(targetType, [], name, valueBinders, strict);
         return true;
     }
 
@@ -500,13 +501,13 @@ public static class EndpointRequestBinder
     /// because guessing that commas separate is exactly the kind of implicit behavior that makes a
     /// binder unpredictable.
     /// </remarks>
-    private static object BuildCollection(Type targetType, IEnumerable<string?> raw, string memberName, EndpointValueBinders? valueBinders)
+    private static object BuildCollection(Type targetType, IEnumerable<string?> raw, string memberName, EndpointValueBinders? valueBinders, bool strict)
     {
         var element = ElementType(targetType)!;
         var items = raw.Where(item => item is not null).ToArray();
         var array = Array.CreateInstance(element, items.Length);
         for (var index = 0; index < items.Length; index++)
-            array.SetValue(Convert(items[index], element, memberName, valueBinders), index);
+            array.SetValue(Convert(items[index], element, memberName, valueBinders, strict), index);
 
         if (targetType.IsArray)
             return array;
@@ -545,6 +546,32 @@ public static class EndpointRequestBinder
     /// <summary>Either the parameter's default, or a strict-mode failure naming the value.</summary>
     private static object? Fallback(string value, Type targetType, Type underlying, string parameterName, bool strict) =>
         strict ? throw new EndpointStrictValueException(parameterName, value, underlying.Name) : DefaultOf(targetType);
+
+    /// <summary>The value of a member no request source supplied at all.</summary>
+    /// <remarks>
+    /// Under strict parsing an absent non-nullable typed value is a failure: the caller was required
+    /// to send something readable and sent nothing. This mirrors how the generated converters treat
+    /// an absent raw value, so the two binders agree. Everything else — nullables, strings,
+    /// collections, and types read only through a registered parser — binds its default, exactly as
+    /// the generated path does for them.
+    /// </remarks>
+    private static object? AbsentValue(Type targetType, string memberName, bool strict) =>
+        strict && RejectsAbsence(targetType)
+            ? throw new EndpointStrictValueException(memberName, string.Empty, targetType.Name)
+            : DefaultOf(targetType);
+
+    /// <summary>Whether the type's converter rejects absence under strict parsing.</summary>
+    /// <remarks>
+    /// Probed through the implemented interfaces rather than <c>MakeGenericType</c>:
+    /// <c>IParsable&lt;TSelf&gt;</c> constrains its own argument, so closing it over a type that
+    /// does not implement it throws instead of answering no.
+    /// </remarks>
+    private static bool RejectsAbsence(Type type) =>
+        type.IsValueType && Nullable.GetUnderlyingType(type) is null &&
+        (type == typeof(bool) || type == typeof(int) || type == typeof(long)
+         || type == typeof(Guid) || type == typeof(DateTimeOffset) || type.IsEnum
+         || System.Array.Exists(type.GetInterfaces(), static candidate =>
+             candidate.IsGenericType && candidate.GetGenericTypeDefinition() == typeof(IParsable<>)));
 
     private static object? DefaultOf(Type type) => type.IsValueType ? Activator.CreateInstance(type) : null;
 
