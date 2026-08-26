@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/NativeEndpoints/NativeEndpoints.csproj" />
+    <ProjectReference Include="../../src/NativeEndpoints.OpenApi/NativeEndpoints.OpenApi.csproj" />
     <ProjectReference Include="../../src/NativeEndpoints.Testing/NativeEndpoints.Testing.csproj" />
 
     <!-- The generator runs over this project's own endpoint fixtures, so its output is under test. -->
