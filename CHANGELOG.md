@@ -86,7 +86,11 @@ now names the offending type and the five supported bases instead of failing opa
   runtime — where the unresolvable `IEndpointProblemWriter` turned the caller's real 400 into an
   opaque 500. The check accepts either the unkeyed registration or a writer keyed by the group's
   own name — exactly the pair the failure path resolves per request — so a host composing only
-  keyed per-group writers keeps mapping as it always did.
+  keyed per-group writers keeps mapping as it always did. The registration is probed through
+  `IServiceProviderIsService` rather than resolved, so a scoped writer — a legitimate lifetime for
+  a request-coupled writer — passes the check without being constructed from the root provider,
+  which scope validation would rightly refuse; a container that cannot answer the probe skips the
+  check rather than guessing.
 - The generated binder for a property-bound contract — a parameterless constructor with settable
   properties — constructed an empty instance and silently discarded every deserialized body value,
   answering the type's defaults where the reflective binder answered the caller's payload. Such
