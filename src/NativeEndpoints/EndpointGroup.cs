@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace NativeEndpoints;
 
@@ -72,8 +73,10 @@ public sealed class EndpointGroup
         EndpointBodyMode? bodyMode = null,
         string[]? accepts = null,
         int successStatus = StatusCodes.Status200OK)
-        where TResponse : notnull =>
-        MapOperation<TRequest>(
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapOperation<TRequest>(
             new EndpointOperationDescriptor
             {
                 Method = method,
@@ -87,8 +90,9 @@ public sealed class EndpointGroup
             async (context, request, cancellationToken) =>
             {
                 var response = await handler(context, request, cancellationToken);
-                await WriteJsonAsync(context, response, successStatus);
+                await writer.WriteAsync(context, response, successStatus);
             });
+    }
 
     /// <summary>Maps a route that takes no request contract onto an inline handler.</summary>
     public IEndpointConventionBuilder MapHandler<TResponse>(
@@ -97,8 +101,10 @@ public sealed class EndpointGroup
         string operation,
         Func<HttpContext, CancellationToken, Task<TResponse>> handler,
         int successStatus = StatusCodes.Status200OK)
-        where TResponse : notnull =>
-        MapUnbound(
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapUnbound(
             new EndpointOperationDescriptor
             {
                 Method = method,
@@ -107,7 +113,8 @@ public sealed class EndpointGroup
                 ResponseType = typeof(TResponse),
                 SuccessStatus = successStatus
             },
-            async context => await WriteJsonAsync(context, await handler(context, context.RequestAborted), successStatus));
+            async context => await writer.WriteAsync(context, await handler(context, context.RequestAborted), successStatus));
+    }
 
     /// <summary>Writes a value using the owner's source-generated serializer metadata.</summary>
     [UnconditionalSuppressMessage("Trimming", "IL2026",
@@ -126,6 +133,41 @@ public sealed class EndpointGroup
         var typeInfo = _jsonContext.GetTypeInfo(typeof(TValue))
                        ?? throw new InvalidOperationException($"No source-generated JSON metadata exists for '{typeof(TValue).FullName}'.");
         return Results.Json(value, typeInfo, _jsonContentType).ExecuteAsync(context);
+    }
+
+    /// <summary>
+    /// A per-endpoint success writer that resolves the response type's serializer metadata once and
+    /// reuses it for every request, instead of looking it up per response.
+    /// </summary>
+    /// <remarks>
+    /// Metadata is resolved on first use rather than at map time: resolution can throw — no
+    /// source-generated metadata for the type, or options with no resolver — and that failure is
+    /// contractually a per-request 500 through the shared failure path, not a startup crash.
+    /// The fast path writes exactly what <see cref="WriteJsonAsync"/> writes for a non-null value of
+    /// the declared type; a null value (which writes no body) and a runtime type diverging from the
+    /// declared one (which serializes polymorphically) keep the original
+    /// <see cref="WriteJsonAsync"/> path so the observable behaviour cannot drift.
+    /// </remarks>
+    private sealed class EndpointJsonWriter<TValue>(EndpointGroup group)
+    {
+        private JsonTypeInfo<TValue>? _typeInfo;
+
+        public Task WriteAsync(HttpContext context, TValue value, int statusCode)
+        {
+            if (value is null || !(typeof(TValue).IsValueType || value.GetType() == typeof(TValue)))
+                return group.WriteJsonAsync(context, value, statusCode);
+
+            // Status first, matching WriteJsonAsync: a metadata failure below must still leave the
+            // status it left before.
+            context.Response.StatusCode = statusCode;
+            var typeInfo = _typeInfo ??= Resolve();
+            return context.Response.WriteAsJsonAsync(value, typeInfo, group._jsonContentType);
+        }
+
+        private JsonTypeInfo<TValue> Resolve() => (JsonTypeInfo<TValue>)(group._jsonContext is null
+            ? group._jsonOptions.GetTypeInfo(typeof(TValue))
+            : group._jsonContext.GetTypeInfo(typeof(TValue))
+              ?? throw new InvalidOperationException($"No source-generated JSON metadata exists for '{typeof(TValue).FullName}'."));
     }
 
     /// <summary>
@@ -246,13 +288,14 @@ public sealed class EndpointGroup
         ArgumentNullException.ThrowIfNull(bind);
         ArgumentNullException.ThrowIfNull(activate);
 
+        var writer = new EndpointJsonWriter<TResponse>(this);
         return MapOperation(
             Describe(options, typeof(TResponse)),
             async (context, request, cancellationToken) =>
             {
                 var endpoint = activate(context.RequestServices);
                 endpoint.HttpContext = context;
-                await WriteJsonAsync(context, await handle(endpoint, request, cancellationToken), options.SuccessStatus);
+                await writer.WriteAsync(context, await handle(endpoint, request, cancellationToken), options.SuccessStatus);
             },
             bind);
     }
@@ -294,6 +337,7 @@ public sealed class EndpointGroup
         ArgumentNullException.ThrowIfNull(bind);
         ArgumentNullException.ThrowIfNull(activate);
 
+        var writer = new EndpointJsonWriter<TResponse>(this);
         return MapOperation(
             Describe(options, typeof(TResponse)),
             async (context, request, cancellationToken) =>
@@ -301,7 +345,7 @@ public sealed class EndpointGroup
                 var endpoint = activate(context.RequestServices);
                 endpoint.HttpContext = context;
                 var result = await handle(endpoint, request, cancellationToken);
-                await WriteJsonAsync(context, result.Response, result.StatusCode);
+                await writer.WriteAsync(context, result.Response, result.StatusCode);
             },
             bind);
     }
@@ -350,33 +394,42 @@ public sealed class EndpointGroup
     internal IEndpointConventionBuilder MapBody<TRequest, TResponse>(
         ApiEndpointOptions options,
         Func<HttpContext, TRequest, CancellationToken, Task<TResponse>> dispatch)
-        where TResponse : notnull =>
-        MapOperation<TRequest>(
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapOperation<TRequest>(
             Describe(options, typeof(TResponse)),
             async (context, request, cancellationToken) =>
-                await WriteJsonAsync(context, await dispatch(context, request, cancellationToken), options.SuccessStatus));
+                await writer.WriteAsync(context, await dispatch(context, request, cancellationToken), options.SuccessStatus));
+    }
 
     /// <summary>Maps an options-described operation with no request contract. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapUnboundBody<TResponse>(
         ApiEndpointOptions options,
         Func<HttpContext, CancellationToken, Task<TResponse>> dispatch)
-        where TResponse : notnull =>
-        MapUnbound(
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapUnbound(
             Describe(options, typeof(TResponse)),
-            async context => await WriteJsonAsync(context, await dispatch(context, context.RequestAborted), options.SuccessStatus));
+            async context => await writer.WriteAsync(context, await dispatch(context, context.RequestAborted), options.SuccessStatus));
+    }
 
     /// <summary>Maps an options-described operation whose status travels with the result. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapResultBody<TRequest, TResponse>(
         ApiEndpointOptions options,
         Func<HttpContext, TRequest, CancellationToken, Task<EndpointResult<TResponse>>> dispatch)
-        where TResponse : notnull =>
-        MapOperation<TRequest>(
+        where TResponse : notnull
+    {
+        var writer = new EndpointJsonWriter<TResponse>(this);
+        return MapOperation<TRequest>(
             Describe(options, typeof(TResponse)),
             async (context, request, cancellationToken) =>
             {
                 var result = await dispatch(context, request, cancellationToken);
-                await WriteJsonAsync(context, result.Response, result.StatusCode);
+                await writer.WriteAsync(context, result.Response, result.StatusCode);
             });
+    }
 
     /// <summary>Maps an options-described operation returning no content. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapNoContent<TRequest>(

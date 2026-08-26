@@ -22,41 +22,22 @@ public static class EndpointValue
     public static bool Supplied(IReadOnlySet<string>? supplied, string name) =>
         supplied is null || supplied.Contains(name);
 
-    /// <summary>Reads a route value, or null when it is absent.</summary>
-    public static string? Route(HttpContext context, string name)
-    {
-        foreach (var entry in context.Request.RouteValues)
-        {
-            if (string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
-                return entry.Value?.ToString();
-        }
+    // Route and query lookups go through TryGetValue rather than a scan: RouteValueDictionary is
+    // documented case-insensitive, and the query collection is backed by an OrdinalIgnoreCase
+    // dictionary that merges case-variant keys while parsing, so the O(1) lookup returns exactly
+    // what the first case-insensitive match of a scan returned.
 
-        return null;
-    }
+    /// <summary>Reads a route value, or null when it is absent.</summary>
+    public static string? Route(HttpContext context, string name) =>
+        context.Request.RouteValues.TryGetValue(name, out var value) ? value?.ToString() : null;
 
     /// <summary>Reads the first value for a query key, or null when the key is absent.</summary>
-    public static string? Query(HttpContext context, string name)
-    {
-        foreach (var entry in context.Request.Query)
-        {
-            if (string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
-                return entry.Value.ToString();
-        }
-
-        return null;
-    }
+    public static string? Query(HttpContext context, string name) =>
+        context.Request.Query.TryGetValue(name, out var value) ? value.ToString() : null;
 
     /// <summary>Every value for a query key, in order.</summary>
-    public static string?[] QueryValues(HttpContext context, string name)
-    {
-        foreach (var entry in context.Request.Query)
-        {
-            if (string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
-                return [.. entry.Value];
-        }
-
-        return [];
-    }
+    public static string?[] QueryValues(HttpContext context, string name) =>
+        context.Request.Query.TryGetValue(name, out var value) ? [.. value] : [];
 
     /// <summary>Reads a request header, or null when it is absent.</summary>
     public static string? Header(HttpContext context, string name) =>

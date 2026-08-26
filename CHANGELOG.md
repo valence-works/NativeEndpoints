@@ -24,6 +24,24 @@ paths support it, via the new public `EndpointGroup.MapRaw`. A class that still 
 `ApiEndpointBase` directly gets diagnostic `NE0005` at build time, and the reflective scan's error
 now names the offending type and the five supported bases instead of failing opaquely.
 
+### Performance
+
+- The per-request hot path sheds work it can do once per endpoint instead, with no observable
+  behaviour change — the conformance suite and the full test suite pin that responses are
+  identical. Success responses resolve the response type's `JsonTypeInfo` once per endpoint and
+  write through `WriteAsJsonAsync` rather than allocating a `Results.Json` result per response;
+  the group's exact configured Content-Type and status semantics are preserved, and a null or
+  runtime-divergent value keeps the original path. Route and query lookups use the collections'
+  own case-insensitive `TryGetValue` instead of scanning every entry per parameter. The reflective
+  binder memoizes a per-contract binding plan — constructor, parameter attributes, defaults, and
+  property getters — in its existing weak-keyed cache instead of re-reflecting per request. When a
+  contract proves no member can fall back from the body to the query (every member binds from a
+  route value or a declared source), the body streams through the serializer in one pass instead
+  of buffering a `JsonDocument` to record supplied properties: the new
+  `EndpointRequestBinder.ReadBodyAsync` overload takes `needsSuppliedProperties`, and both binders
+  pass it from what they know statically. Generated binders also hoist their per-element
+  collection converters into per-endpoint delegates instead of allocating one per request.
+
 ### Breaking
 
 - `EndpointGroup.MapOperation<TMessage>` takes an `EndpointOperationDescriptor` record rather than

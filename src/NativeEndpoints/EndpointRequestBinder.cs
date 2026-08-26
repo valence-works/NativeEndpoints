@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace NativeEndpoints;
 
@@ -106,9 +107,103 @@ public static class EndpointRequestBinder
 
     // Weak-keyed on purpose. Contract types ship in each domain's collectible .Api assembly, so a
     // strong static reference here would root that assembly's load context for host lifetime.
-    // ConditionalWeakTable uses ephemerons, so ConstructorInfo referencing its own declaring Type
-    // does not keep the key alive.
-    private static readonly ConditionalWeakTable<Type, ConstructorInfo> Constructors = new();
+    // ConditionalWeakTable uses ephemerons, so a plan holding ConstructorInfo, ParameterInfo, and
+    // PropertyInfo of its own key type does not keep the key alive.
+    private static readonly ConditionalWeakTable<Type, ContractPlan> Plans = new();
+
+    /// <summary>
+    /// Everything reflection resolves about one contract, resolved once per contract type instead of
+    /// per request. Pure memoization: the lookups, their order, and their failures are exactly the
+    /// ones the binder performed inline before.
+    /// </summary>
+    private sealed class ContractPlan
+    {
+        public required ConstructorInfo Constructor { get; init; }
+        public required ParameterPlan[] Parameters { get; init; }
+
+        /// <summary>The writable properties, for a contract bound by assignment (no parameters).</summary>
+        public required PropertyPlan[] Properties { get; init; }
+
+        /// <summary>
+        /// Whether any member could consult the supplied-property set. False only when every member
+        /// binds from a declared source, where the body's supplied names can never matter.
+        /// </summary>
+        public required bool NeedsSuppliedProperties { get; init; }
+    }
+
+    /// <param name="Name">The constructor parameter's name.</param>
+    /// <param name="Declared">The binding source declared on the parameter or its property, if any.</param>
+    /// <param name="ParameterType">The parameter's declared type.</param>
+    /// <param name="HasDefaultValue">Whether the parameter declares a default.</param>
+    /// <param name="DefaultValue">The declared default, when there is one.</param>
+    /// <param name="Property">
+    /// The contract's own property of the same name, for body reads. Only resolved when no
+    /// parameter-level attribute exists, exactly when the inline lookup resolved it.
+    /// </param>
+    private sealed record ParameterPlan(
+        string Name,
+        BindFromAttribute? Declared,
+        Type ParameterType,
+        bool HasDefaultValue,
+        object? DefaultValue,
+        PropertyInfo? Property);
+
+    /// <param name="Property">A writable public instance property.</param>
+    /// <param name="Declared">The binding source declared on it, if any.</param>
+    private sealed record PropertyPlan(PropertyInfo Property, BindFromAttribute? Declared);
+
+    private static ContractPlan CreatePlan(Type type)
+    {
+        var constructor = SelectConstructor(type);
+        var parameters = constructor.GetParameters();
+
+        if (parameters.Length == 0)
+        {
+            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(property => property.CanWrite)
+                .Select(property => new PropertyPlan(property, property.GetCustomAttribute<BindFromAttribute>()))
+                .ToArray();
+
+            return new ContractPlan
+            {
+                Constructor = constructor,
+                Parameters = [],
+                Properties = properties,
+                NeedsSuppliedProperties = System.Array.Exists(properties, static property => property.Declared is null)
+            };
+        }
+
+        var plans = new ParameterPlan[parameters.Length];
+        for (var index = 0; index < parameters.Length; index++)
+        {
+            var parameter = parameters[index];
+            var name = parameter.Name!;
+
+            // A positional record can carry the attribute on the parameter ([FromHeader] string x)
+            // or on the generated property ([property: FromHeader] string x). Both are idiomatic, so
+            // both are honoured. The property is only resolved when the parameter carries no
+            // attribute, exactly as the inline fallback resolved it.
+            var declared = parameter.GetCustomAttribute<BindFromAttribute>();
+            PropertyInfo? property = null;
+            if (declared is null)
+            {
+                property = type.GetProperty(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                declared = property?.GetCustomAttribute<BindFromAttribute>();
+            }
+
+            var hasDefault = parameter.HasDefaultValue;
+            plans[index] = new ParameterPlan(
+                name, declared, parameter.ParameterType, hasDefault, hasDefault ? parameter.DefaultValue : null, property);
+        }
+
+        return new ContractPlan
+        {
+            Constructor = constructor,
+            Parameters = plans,
+            Properties = [],
+            NeedsSuppliedProperties = System.Array.Exists(plans, static plan => plan.Declared is null)
+        };
+    }
 
     /// <summary>Binds a request contract from the route values, the query string, and the body.</summary>
     /// <summary>
@@ -119,10 +214,31 @@ public static class EndpointRequestBinder
     /// media-type behaviour is subtle enough that two implementations of it would drift.
     /// </remarks>
     /// <returns>The deserialized body, or a failure describing why it could not be read.</returns>
+    public static ValueTask<EndpointBodyResult<T>> ReadBodyAsync<T>(
+        HttpContext context,
+        JsonSerializerOptions jsonOptions,
+        EndpointBodyMode bodyMode) =>
+        ReadBodyAsync<T>(context, jsonOptions, bodyMode, needsSuppliedProperties: true);
+
+    /// <summary>
+    /// Reads and deserializes the request body, applying the body mode's media-type rules, skipping
+    /// the supplied-property pass when the caller proves it cannot matter.
+    /// </summary>
+    /// <param name="context">The request to read.</param>
+    /// <param name="jsonOptions">The serializer options governing the body.</param>
+    /// <param name="bodyMode">How the request body is treated.</param>
+    /// <param name="needsSuppliedProperties">
+    /// Whether any bound member could consult <see cref="EndpointBodyResult{T}.SuppliedProperties"/>.
+    /// Pass false only when no member falls back from the body to the query — every member binds
+    /// from a route value or a declared source — so the body can stream through the serializer in
+    /// one pass instead of buffering a DOM. The result then carries a null supplied set, which
+    /// counts every name as supplied; that is exactly the semantics when nothing consults it.
+    /// </param>
     public static async ValueTask<EndpointBodyResult<T>> ReadBodyAsync<T>(
         HttpContext context,
         JsonSerializerOptions jsonOptions,
-        EndpointBodyMode bodyMode)
+        EndpointBodyMode bodyMode,
+        bool needsSuppliedProperties)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(jsonOptions);
@@ -152,20 +268,31 @@ public static class EndpointRequestBinder
         HashSet<string>? supplied = null;
         try
         {
-            // Buffered so the payload can be read twice: once to deserialize, once to record which
-            // properties the caller actually sent. Without that second pass, a property sent as null
-            // and a property omitted entirely are indistinguishable, and an omitted one would stop
-            // falling through to the query string.
-            using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
-            if (document.RootElement.ValueKind is JsonValueKind.Object)
+            if (needsSuppliedProperties || !MatchesDocumentDefaults(jsonOptions))
             {
-                supplied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var property in document.RootElement.EnumerateObject())
-                    supplied.Add(property.Name);
-            }
+                // Buffered so the payload can be read twice: once to deserialize, once to record which
+                // properties the caller actually sent. Without that second pass, a property sent as null
+                // and a property omitted entirely are indistinguishable, and an omitted one would stop
+                // falling through to the query string.
+                using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
+                if (document.RootElement.ValueKind is JsonValueKind.Object)
+                {
+                    supplied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var property in document.RootElement.EnumerateObject())
+                        supplied.Add(property.Name);
+                }
 
-            var typeInfo = jsonOptions.GetTypeInfo(typeof(T));
-            body = (T?)document.Deserialize(typeInfo);
+                var typeInfo = jsonOptions.GetTypeInfo(typeof(T));
+                body = (T?)document.Deserialize(typeInfo);
+            }
+            else
+            {
+                // Nothing consults the supplied set, so the payload streams through the serializer
+                // in a single pass with no DOM. The serializer applies the same syntax rules and
+                // throws the same JsonException shapes the document parse and deserialize did.
+                var typeInfo = (JsonTypeInfo<T>)jsonOptions.GetTypeInfo(typeof(T));
+                body = await JsonSerializer.DeserializeAsync(context.Request.Body, typeInfo, context.RequestAborted);
+            }
         }
         catch (JsonException exception)
         {
@@ -195,9 +322,23 @@ public static class EndpointRequestBinder
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(jsonOptions);
 
+        // An invalid contract (no single public constructor, an ambiguous member) must keep failing
+        // after the body is read, exactly where the reflection used to run; the throw is replayed
+        // from BindContract below when plan building fails here.
+        ContractPlan? plan;
+        try
+        {
+            plan = Plans.GetValue(typeof(T), CreatePlan);
+        }
+        catch
+        {
+            plan = null;
+        }
+
         // Body reading is shared with generated binders, so the media-type rules have exactly one
-        // implementation and the two paths cannot drift apart.
-        var read = await ReadBodyAsync<T>(context, jsonOptions, options.BodyMode);
+        // implementation and the two paths cannot drift apart. The supplied-property pass is skipped
+        // only when the plan proves no member could consult it.
+        var read = await ReadBodyAsync<T>(context, jsonOptions, options.BodyMode, plan?.NeedsSuppliedProperties ?? true);
         if (!read.Succeeded)
             return read.Failure;
 
@@ -208,7 +349,8 @@ public static class EndpointRequestBinder
         var strict = options.StrictTypedParsing;
         try
         {
-            return new(BindContract<T>(body, supplied, context, valueBinders, strict), null, null);
+            plan ??= Plans.GetValue(typeof(T), CreatePlan);
+            return new(BindContract<T>(plan, body, supplied, context, valueBinders, strict), null, null);
         }
         catch (EndpointStrictValueException failure)
         {
@@ -221,19 +363,19 @@ public static class EndpointRequestBinder
     }
 
     private static T BindContract<T>(
+        ContractPlan plan,
         object? body,
         IReadOnlySet<string>? supplied,
         HttpContext context,
         EndpointValueBinders? valueBinders,
         bool strict)
     {
-        var constructor = Constructors.GetValue(typeof(T), SelectConstructor);
-        var parameters = constructor.GetParameters();
+        var parameters = plan.Parameters;
 
         // A contract declared with init-only properties rather than positional parameters is bound by
         // assignment: the deserialized body is kept and route values are applied over it.
         if (parameters.Length == 0)
-            return BindProperties<T>(body, supplied, context, valueBinders, strict);
+            return BindProperties<T>(plan, body, supplied, context, valueBinders, strict);
         var arguments = new object?[parameters.Length];
         var routeValues = context.Request.RouteValues;
         var query = context.Request.Query;
@@ -241,15 +383,9 @@ public static class EndpointRequestBinder
         for (var index = 0; index < parameters.Length; index++)
         {
             var parameter = parameters[index];
-            var name = parameter.Name!;
+            var name = parameter.Name;
 
-            // A positional record can carry the attribute on the parameter ([FromHeader] string x)
-            // or on the generated property ([property: FromHeader] string x). Both are idiomatic, so
-            // both are honoured.
-            var declared = parameter.GetCustomAttribute<BindFromAttribute>()
-                           ?? typeof(T).GetProperty(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                               ?.GetCustomAttribute<BindFromAttribute>();
-            if (declared is not null)
+            if (parameter.Declared is { } declared)
             {
                 arguments[index] = BindDeclared(context, declared, name, parameter.ParameterType, valueBinders, strict);
                 continue;
@@ -263,7 +399,7 @@ public static class EndpointRequestBinder
 
             if (body is not null && SuppliedByBody(supplied, name))
             {
-                arguments[index] = ReadProperty(body, name, parameter.ParameterType);
+                arguments[index] = ReadProperty(body, parameter, typeof(T));
                 continue;
             }
 
@@ -284,21 +420,17 @@ public static class EndpointRequestBinder
                 : AbsentValue(parameter.ParameterType, name, strict);
         }
 
-        return (T)constructor.Invoke(arguments);
+        return (T)plan.Constructor.Invoke(arguments);
     }
 
-    private static T BindProperties<T>(object? body, IReadOnlySet<string>? supplied, HttpContext context, EndpointValueBinders? valueBinders, bool strict)
+    private static T BindProperties<T>(ContractPlan plan, object? body, IReadOnlySet<string>? supplied, HttpContext context, EndpointValueBinders? valueBinders, bool strict)
     {
         var instance = body ?? Activator.CreateInstance(typeof(T))!;
         var routeValues = context.Request.RouteValues;
         var query = context.Request.Query;
 
-        foreach (var property in typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        foreach (var (property, declared) in plan.Properties)
         {
-            if (!property.CanWrite)
-                continue;
-
-            var declared = property.GetCustomAttribute<BindFromAttribute>();
             if (declared is not null)
                 property.SetValue(instance, BindDeclared(context, declared, property.Name, property.PropertyType, valueBinders, strict));
             else if (TryGetRouteValue(routeValues, property.Name, out var routeValue))
@@ -324,23 +456,31 @@ public static class EndpointRequestBinder
         return constructors[0];
     }
 
-    private static object? ReadProperty(object source, string name, Type targetType)
+    private static object? ReadProperty(object source, ParameterPlan plan, Type contractType)
     {
-        var property = source.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-        return property is null ? DefaultOf(targetType) : property.GetValue(source);
+        // The deserialized body is normally exactly the contract type, whose property the plan
+        // already resolved. A polymorphic payload can deserialize to a derived instance, which keeps
+        // the original runtime-type lookup.
+        var property = source.GetType() == contractType
+            ? plan.Property
+            : source.GetType().GetProperty(plan.Name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        return property is null ? DefaultOf(plan.ParameterType) : property.GetValue(source);
     }
 
     /// <summary>Whether the caller actually sent this property. Null means the body was not an object.</summary>
     private static bool SuppliedByBody(IReadOnlySet<string>? supplied, string name) =>
         supplied is null || supplied.Contains(name);
 
+    // Route and query lookups go through TryGetValue rather than a scan: RouteValueDictionary is
+    // documented case-insensitive, and the query collection is backed by an OrdinalIgnoreCase
+    // dictionary that merges case-variant keys while parsing, so the O(1) lookup returns exactly
+    // what the first case-insensitive match of a scan returned.
+
     private static bool TryGetRouteValue(RouteValueDictionary routeValues, string name, out string? value)
     {
-        foreach (var entry in routeValues)
+        if (routeValues.TryGetValue(name, out var entry))
         {
-            if (!string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
-                continue;
-            value = entry.Value?.ToString();
+            value = entry?.ToString();
             return value is not null;
         }
 
@@ -350,11 +490,9 @@ public static class EndpointRequestBinder
 
     private static bool TryGetQueryValue(IQueryCollection query, string name, out string? value)
     {
-        foreach (var entry in query)
+        if (query.TryGetValue(name, out var entry))
         {
-            if (!string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
-                continue;
-            value = entry.Value.ToString();
+            value = entry.ToString();
             return true;
         }
 
@@ -478,18 +616,11 @@ public static class EndpointRequestBinder
         if (ElementType(targetType) is null)
             return false;
 
-        foreach (var entry in query)
-        {
-            if (!string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            value = BuildCollection(targetType, entry.Value!, name, valueBinders, strict);
-            return true;
-        }
-
         // A collection parameter with no values present binds empty rather than null, so a handler
         // can enumerate it without a null check.
-        value = BuildCollection(targetType, [], name, valueBinders, strict);
+        value = query.TryGetValue(name, out var entries)
+            ? BuildCollection(targetType, entries!, name, valueBinders, strict)
+            : BuildCollection(targetType, [], name, valueBinders, strict);
         return true;
     }
 
@@ -574,6 +705,19 @@ public static class EndpointRequestBinder
              candidate.IsGenericType && candidate.GetGenericTypeDefinition() == typeof(IParsable<>)));
 
     private static object? DefaultOf(Type type) => type.IsValueType ? Activator.CreateInstance(type) : null;
+
+    /// <summary>
+    /// Whether these serializer options read exactly what <see cref="JsonDocument.ParseAsync(System.IO.Stream, JsonDocumentOptions, CancellationToken)"/>
+    /// reads with its defaults. The DOM pass has always parsed with default document options —
+    /// trailing commas and comments rejected, depth capped at 64 — whatever the serializer options
+    /// say, so a single streaming pass may only replace it when the serializer would enforce the
+    /// same syntax rules.
+    /// </summary>
+    private static bool MatchesDocumentDefaults(JsonSerializerOptions jsonOptions) =>
+        !jsonOptions.AllowTrailingCommas &&
+        jsonOptions.ReadCommentHandling is JsonCommentHandling.Disallow &&
+        jsonOptions.MaxDepth is 0 or 64 &&
+        jsonOptions.AllowDuplicateProperties;
 
     private static bool IsJsonContentType(string? contentType) =>
         !string.IsNullOrWhiteSpace(contentType) &&
