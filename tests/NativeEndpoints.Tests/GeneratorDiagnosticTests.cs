@@ -63,6 +63,29 @@ public class GeneratorDiagnosticTests
         Assert.Empty(compileErrors);
     }
 
+    [Fact]
+    public void A_response_only_endpoint_is_mapped_through_the_generated_unbound_path()
+    {
+        var (diagnostics, generated, compileErrors) = Run("""
+            namespace Clean;
+
+            public sealed record Status(string State);
+
+            [NativeEndpoints.Get("status")]
+            public sealed class StatusEndpoint : NativeEndpoints.ApiEndpointWithoutRequest<Status>
+            {
+                public override System.Threading.Tasks.Task<Status> HandleAsync(System.Threading.CancellationToken cancellationToken) =>
+                    System.Threading.Tasks.Task.FromResult(new Status("ok"));
+            }
+            """);
+
+        Assert.Empty(diagnostics);
+
+        // Mapped first-class through the no-contract generated path, and the output compiles.
+        Assert.Contains("MapGeneratedUnbound<global::Clean.StatusEndpoint, global::Clean.Status>", generated);
+        Assert.Empty(compileErrors);
+    }
+
     private static (ImmutableArray<Diagnostic> Diagnostics, string Generated, Diagnostic[] CompileErrors) Run(string source)
     {
         var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)

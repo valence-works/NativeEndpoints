@@ -63,6 +63,17 @@ public sealed class LenientItemsEndpoint : ApiEndpoint<ItemsQuery, ItemsView>
         Task.FromResult(new ItemsView(request.Price.Amount, request.Ids));
 }
 
+/// <summary>The response returned by <see cref="StatusEndpoint"/>.</summary>
+public sealed record ServiceStatus(string State, int UptimeSeconds);
+
+/// <summary>The no-request shape: nothing binds, and the response is written as JSON.</summary>
+[NativeEndpoints.Get("status")]
+public sealed class StatusEndpoint : ApiEndpointWithoutRequest<ServiceStatus>
+{
+    public override Task<ServiceStatus> HandleAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(new ServiceStatus("healthy", 42));
+}
+
 /// <summary>The raw shape: no contract, and the handler writes a non-JSON response itself.</summary>
 [NativeEndpoints.Get("raw-export")]
 public sealed class RawExportEndpoint : NativeEndpoints.ApiEndpoint

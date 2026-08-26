@@ -306,6 +306,30 @@ public sealed class EndpointGroup
             bind);
     }
 
+    /// <summary>Maps a generated endpoint that binds no request contract.</summary>
+    /// <remarks>
+    /// The reflection-free path for <see cref="ApiEndpointWithoutRequest{TResponse}"/> classes:
+    /// nothing binds, so the generated slot supplies only the activator. The reflective mapper
+    /// produces identical endpoints by a slower route; the conformance suite asserts they agree.
+    /// </remarks>
+    public IEndpointConventionBuilder MapGeneratedUnbound<TEndpoint, TResponse>(
+        ApiEndpointOptions options,
+        Func<IServiceProvider, TEndpoint> activate,
+        Func<TEndpoint, CancellationToken, Task<TResponse>> handle)
+        where TEndpoint : ApiEndpointBase
+        where TResponse : notnull
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(activate);
+
+        return MapUnboundBody<TResponse>(options, async (context, cancellationToken) =>
+        {
+            var endpoint = activate(context.RequestServices);
+            endpoint.HttpContext = context;
+            return await handle(endpoint, cancellationToken);
+        });
+    }
+
     /// <summary>Maps an options-described operation whose dispatch writes the response itself.</summary>
     /// <remarks>
     /// The raw path, shared by the reflective mapper and the generated registration for non-generic

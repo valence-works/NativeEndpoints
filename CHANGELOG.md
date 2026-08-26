@@ -38,6 +38,12 @@ now names the offending type and the five supported bases instead of failing opa
   property names alongside the body.
 - Regenerate: binders emitted by preview.1 do not match the new delegate shape.
 
+### Fixed
+
+- A routed `ApiEndpointWithoutRequest<TResponse>` endpoint made the generator emit a registration
+  that did not compile. The shape now has a first-class generated path through the new public
+  `EndpointGroup.MapGeneratedUnbound`, producing the same endpoint as the reflective mapper.
+
 ## 1.0.0-preview.1
 
 First public preview. The API is settling but no longer moving weekly; breaking changes before 1.0
