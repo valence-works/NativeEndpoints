@@ -13,10 +13,15 @@ generate from: no `Operation` value produces `AspNetCoreIdentityLoginPage` under
 `{Owner}Endpoints{Operation}` rule, so deriving cannot be the only option. Deriving stays the
 default and stays the better choice for anything new.
 
-**An operation can declare its success content type.** `options.SuccessContentType` documents a
-response that is not JSON — a server-sent event stream, a rendered page. It describes what the
-handler writes rather than changing what it writes, which is the only thing the document was
-previously unable to say about a response-owning endpoint.
+**A response-owning endpoint can describe the response it owns.** `options.SuccessContentType`
+documents a body that is not JSON — a server-sent event stream, a rendered page — and
+`options.ResponseType` documents the body's type, which `MapRaw` previously hard-coded to none.
+Together with the `DocumentedStatus` fix below, this is what lets a raw endpoint be documented at
+all: owning the response is not the same as having nothing to say about it. Both describe what the
+handler writes rather than changing what it writes, and both default to saying nothing, which is
+what a raw endpoint that really is undescribed wants. `ResponseType` is consulted only by the raw
+shape — the typed base classes take their response type from their own type argument, which is
+always more accurate than a restatement.
 
 **A group's tag is separable from its name.** `MapEndpointGroup(name, tag: ...)` publishes
 operations under a tag that is not the group name, and `EndpointOperationContext.Tag` carries it.

@@ -147,6 +147,18 @@ public sealed class ApiEndpointOptions
     public bool StrictTypedParsing { get; set; }
 
     /// <summary>
+    /// The success response body type, for an operation that writes its own response. Null
+    /// documents no body.
+    /// </summary>
+    /// <remarks>
+    /// Consulted only by the response-owning shape. The typed base classes take their response type
+    /// from their own type argument, which is always more accurate than a restatement here, so this
+    /// is ignored on those paths. An <see cref="ApiEndpoint"/> has no such type argument — it writes
+    /// the response itself — and this is how it says what it writes.
+    /// </remarks>
+    public Type? ResponseType { get; set; }
+
+    /// <summary>
     /// The content type the success response is documented as. Null documents JSON.
     /// </summary>
     /// <remarks>

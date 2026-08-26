@@ -407,16 +407,26 @@ public sealed class EndpointGroup
     /// <remarks>
     /// The raw path, shared by the reflective mapper and the generated registration for non-generic
     /// <see cref="ApiEndpoint"/> classes. Nothing is bound and nothing is written on success — the
-    /// dispatch owns the response entirely — so no JSON response body is documented, and the
-    /// documented status is the runtime <see cref="ApiEndpointOptions.SuccessStatus"/> (200 unless
-    /// Configure changes it). The shared failure path — fault renderers, then exception translators,
-    /// then the sanitized 500 — applies when the dispatch throws.
+    /// dispatch owns the response entirely.
+    /// <para>
+    /// Owning the response is not the same as having nothing to say about it. The operation still
+    /// describes itself: <see cref="ApiEndpointOptions.ResponseType"/> and
+    /// <see cref="ApiEndpointOptions.SuccessContentType"/> document the body it writes, and
+    /// <see cref="ApiEndpointOptions.DocumentedStatus"/> documents a status that deliberately differs
+    /// from the runtime one. Each defaults to saying nothing, which is what a raw endpoint that
+    /// really is undescribed wants.
+    /// </para>
+    /// <para>
+    /// The shared failure path — fault renderers, then exception translators, then the sanitized 500
+    /// — applies when the dispatch throws, unless
+    /// <see cref="ApiEndpointOptions.ContainFailures"/> is false.
+    /// </para>
     /// </remarks>
     public IEndpointConventionBuilder MapRaw(ApiEndpointOptions options, Func<HttpContext, Task> dispatch)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(dispatch);
-        return MapUnbound(Describe(options, responseType: null), dispatch);
+        return MapUnbound(Describe(options, options.ResponseType), dispatch);
     }
 
     /// <summary>Maps an options-described operation returning a body. Used by the endpoint-class mapper.</summary>

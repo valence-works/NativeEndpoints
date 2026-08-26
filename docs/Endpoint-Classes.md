@@ -78,6 +78,7 @@ public override void Configure(ApiEndpointOptions options)
 | `BodyMode` | How the request body is treated. See [[Binding]] |
 | `SuccessStatus` | The status written at runtime on success |
 | `DocumentedStatus` | The status the document declares, when it deliberately differs from the runtime one |
+| `ResponseType` | The success body's type, for the response-owning shape. Ignored by the typed bases, which take it from their type argument |
 | `SuccessContentType` | The content type the success response is documented as. Defaults to JSON |
 | `DocumentAuthResponses` | Forces the documented 401/403 pair on or off |
 | `ContainFailures` | Whether the group answers an unhandled exception, or the host pipeline does |
@@ -102,9 +103,13 @@ An [`ApiEndpoint`](#writing-the-response-yourself) writes its own response, so i
 response is rather than having it inferred:
 
 ```csharp
+options.ResponseType = typeof(TraceDetail);   // what the body is
 options.SuccessContentType = "text/event-stream";
-options.ContainFailures = false;   // let the host's exception pipeline answer faults
+options.ContainFailures = false;              // let the host's exception pipeline answer faults
 ```
+
+Owning the response is not the same as having nothing to say about it. All three describe what the
+handler writes rather than changing it, and all three default to saying nothing.
 
 `ContainFailures` defaults to true, which is what you want unless the owner's published contract
 makes the host responsible for unexpected failures — a host already running its own exception

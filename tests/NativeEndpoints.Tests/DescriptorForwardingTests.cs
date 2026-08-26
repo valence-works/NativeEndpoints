@@ -223,6 +223,37 @@ public class PublishedDocumentFidelityTests
         Assert.Contains("application/json", produces.ContentTypes);
     }
 
+    /// <summary>
+    /// Owning the response is not the same as having nothing to say about it. A raw endpoint that
+    /// writes its own body can still document what that body is.
+    /// </summary>
+    [Fact]
+    public void A_response_owning_endpoint_can_document_the_body_it_writes()
+    {
+        var endpoint = Map(group => group.MapRaw(
+            Options(options =>
+            {
+                options.ResponseType = typeof(string);
+                options.SuccessStatus = StatusCodes.Status201Created;
+                options.DocumentedStatus = StatusCodes.Status200OK;
+            }),
+            _ => Task.CompletedTask));
+
+        var produces = Assert.Single(endpoint.Metadata.OfType<IProducesResponseTypeMetadata>());
+        Assert.Equal(typeof(string), produces.Type);
+        Assert.Equal(StatusCodes.Status200OK, produces.StatusCode);
+    }
+
+    [Fact]
+    public void A_response_owning_endpoint_that_declares_nothing_documents_no_body()
+    {
+        var endpoint = Map(group => group.MapRaw(Options(), _ => Task.CompletedTask));
+
+        var produces = Assert.Single(endpoint.Metadata.OfType<IProducesResponseTypeMetadata>());
+        Assert.Equal(typeof(void), produces.Type);
+        Assert.Empty(produces.ContentTypes);
+    }
+
     [Fact]
     public void A_group_tag_is_published_instead_of_the_group_name()
     {
