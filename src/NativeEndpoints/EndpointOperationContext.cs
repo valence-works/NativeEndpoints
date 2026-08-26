@@ -37,6 +37,9 @@ public sealed record EndpointOperationContext
     /// <summary>Whether the operation reads a JSON body, so body members are not repeated as parameters.</summary>
     public bool ReadsBody { get; init; }
 
+    /// <summary>What the body is read as, which decides whether members are documented as form fields.</summary>
+    public EndpointBodyKind BodyKind { get; init; } = EndpointBodyKind.Json;
+
     /// <summary>The success response body type. Null means no body.</summary>
     public Type? ResponseType { get; init; }
 

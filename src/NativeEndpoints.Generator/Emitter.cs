@@ -33,7 +33,9 @@ internal static class Emitter
         // The per-element converters close over nothing, so each is allocated once per endpoint
         // rather than once per request. Which of the pair applies is decided by the per-call strict
         // flag, keeping the emitted conversion identical to the captured lambda it replaces.
-        foreach (var parameter in contract.Where(item => item.IsArray || item.IsList))
+        // File collections are excluded: their elements are not converted from a string at all, so
+        // there is no element converter to hoist and emitting one writes a call with no method name.
+        foreach (var parameter in contract.Where(item => (item.IsArray || item.IsList) && item.FormFile is FormFileKind.None))
         {
             var converter = parameter.ElementConverter!;
             builder.AppendLine($"        private static readonly global::System.Func<string?, {parameter.ElementTypeName}> Convert{parameter.Name}Strict =");
@@ -57,7 +59,7 @@ internal static class Emitter
         builder.AppendLine("            global::NativeEndpoints.EndpointBindingOptions options)");
         builder.AppendLine("        {");
         builder.AppendLine("            // Body reading is shared with the reflective binder so the media-type rules cannot drift.");
-        builder.AppendLine($"            var read = await global::NativeEndpoints.EndpointRequestBinder.ReadBodyAsync<{endpoint.RequestType}>(context, jsonOptions, options.BodyMode, needsSuppliedProperties: {(needsSupplied ? "true" : "false")});");
+        builder.AppendLine($"            var read = await global::NativeEndpoints.EndpointRequestBinder.ReadBodyAsync<{endpoint.RequestType}>(context, jsonOptions, options.BodyMode, needsSuppliedProperties: {(needsSupplied ? "true" : "false")}, options.BodyKind);");
         builder.AppendLine("            if (!read.Succeeded)");
         builder.AppendLine("                return read.Failure;");
         builder.AppendLine();
@@ -95,6 +97,11 @@ internal static class Emitter
     /// <summary>The expression that produces one contract member.</summary>
     private static string Expression(ContractParameter parameter, EndpointModel endpoint)
     {
+        // Files first, ahead of every other branch. A file is not converted from a string, and it
+        // never participates in route or query inference, so none of what follows applies to it.
+        if (parameter.FormFile is not FormFileKind.None)
+            return FormFile(parameter);
+
         if (parameter.DeclaredSource is { } declared)
             return Read(parameter, declared, parameter.DeclaredKey ?? parameter.Name);
 
@@ -106,13 +113,41 @@ internal static class Emitter
         if (routeKey is not null)
             return Read(parameter, "Route", routeKey);
 
-        // Route wins over the body, and the body wins over the query, exactly as the reflective
-        // binder orders them. The conditional is emitted unconditionally on purpose: `body` is null
-        // whenever no body was read, so this stays correct whatever Configure does to the body mode,
-        // where a compile-time guess about it would not.
+        // Route wins over the body, the body wins over the query, and a form *is* the body — so the
+        // form sits in the body's place rather than adding a step. Both conditionals are emitted
+        // unconditionally on purpose: `body` is null whenever no JSON body was read and
+        // SuppliedByForm is false whenever the request was not a form, so this stays correct
+        // whatever Configure does to the body mode or kind, where a compile-time guess would not.
+        var form = Read(parameter, "Form", parameter.Name);
         var query = Read(parameter, "Query", parameter.Name);
         return $"body is not null && global::NativeEndpoints.EndpointValue.Supplied(supplied, \"{parameter.Name}\") "
-               + $"? body.{parameter.Name} : {query}";
+               + $"? body.{parameter.Name} "
+               + $": global::NativeEndpoints.EndpointValue.SuppliedByForm(context, \"{parameter.Name}\") "
+               + $"? {form} : {query}";
+    }
+
+    /// <summary>The expression that produces a file-typed member.</summary>
+    private static string FormFile(ContractParameter parameter)
+    {
+        var key = parameter.DeclaredKey ?? parameter.Name;
+        switch (parameter.FormFile)
+        {
+            case FormFileKind.All:
+                return "global::NativeEndpoints.EndpointValue.AllFiles(context)";
+
+            case FormFileKind.Many:
+                var files = $"global::NativeEndpoints.EndpointValue.Files(context, \"{key}\")";
+                return parameter.IsList
+                    ? $"new global::System.Collections.Generic.List<global::Microsoft.AspNetCore.Http.IFormFile>({files})"
+                    : files;
+
+            default:
+                // An absent file is null, exactly as the reflective binder leaves it. Where the
+                // member is a non-nullable reference the generated code says so rather than
+                // pretending otherwise, so the two binders stay identical.
+                var file = $"global::NativeEndpoints.EndpointValue.File(context, \"{key}\")";
+                return parameter.SuppressNull ? file + "!" : file;
+        }
     }
 
     private static string Read(ContractParameter parameter, string source, string key)

@@ -9,7 +9,13 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace NativeEndpoints;
 
-/// <summary>How an endpoint treats a JSON request body.</summary>
+/// <summary>
+/// Whether an endpoint reads a request body, and how strict the media-type gate is.
+/// </summary>
+/// <remarks>
+/// Orthogonal to <see cref="EndpointBodyKind"/>, which decides what the body is read <em>as</em>.
+/// This decides only whether one is required and how a mismatched content type is answered.
+/// </remarks>
 public enum EndpointBodyMode
 {
     /// <summary>No body is read. Values come from route and query only.</summary>
@@ -44,6 +50,22 @@ public enum EndpointBodyMode
     OptionalWithContentType
 }
 
+/// <summary>What an endpoint reads its request body as.</summary>
+/// <remarks>
+/// Deliberately separate from <see cref="EndpointBodyMode"/>. Folding the two together would cross a
+/// three-valued media-type strictness with a media kind and produce a dozen enum members, most of
+/// them meaningless. Kept apart, each says one thing: the mode says whether a body is required, the
+/// kind says how to read it.
+/// </remarks>
+public enum EndpointBodyKind
+{
+    /// <summary>A JSON body deserialized into the contract. The default.</summary>
+    Json,
+
+    /// <summary>A URL-encoded or multipart form, read field by field.</summary>
+    Form
+}
+
 /// <summary>The reason a request could not be bound, mapped by the caller to a status code.</summary>
 public enum EndpointBindingFailure
 {
@@ -53,6 +75,9 @@ public enum EndpointBindingFailure
     MissingBody,
     /// <summary>The body was present but could not be deserialized.</summary>
     MalformedBody,
+
+    /// <summary>The body exceeded a configured size limit. Reported as 413 rather than 400.</summary>
+    RequestTooLarge,
 
     /// <summary>
     /// A typed route, query, header, or claim value did not parse. Raised only under strict parsing.
@@ -234,17 +259,26 @@ public static class EndpointRequestBinder
     /// one pass instead of buffering a DOM. The result then carries a null supplied set, which
     /// counts every name as supplied; that is exactly the semantics when nothing consults it.
     /// </param>
+    /// <param name="bodyKind">
+    /// What the body is read as. <see cref="EndpointBodyKind.Form"/> reads a form instead of JSON,
+    /// which makes <paramref name="needsSuppliedProperties"/> moot: a form collection answers
+    /// presence directly, so the result carries a null supplied set either way.
+    /// </param>
     public static async ValueTask<EndpointBodyResult<T>> ReadBodyAsync<T>(
         HttpContext context,
         JsonSerializerOptions jsonOptions,
         EndpointBodyMode bodyMode,
-        bool needsSuppliedProperties)
+        bool needsSuppliedProperties,
+        EndpointBodyKind bodyKind = EndpointBodyKind.Json)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(jsonOptions);
 
         if (bodyMode is EndpointBodyMode.None)
             return new(true, default, default, null);
+
+        if (bodyKind is EndpointBodyKind.Form)
+            return await ReadFormAsync<T>(context, bodyMode);
 
         var declared = !string.IsNullOrWhiteSpace(context.Request.ContentType);
         var isJson = declared && IsJsonContentType(context.Request.ContentType);
@@ -306,6 +340,66 @@ public static class EndpointRequestBinder
         return new(true, body, default, supplied);
     }
 
+    /// <summary>
+    /// Reads a URL-encoded or multipart form, applying the body mode's media-type rules.
+    /// </summary>
+    /// <remarks>
+    /// Returns no value. <c>ReadFormAsync</c> caches the parsed form onto <c>HttpRequest.Form</c>, so
+    /// both binders read the fields back off the context; threading them through the result would
+    /// mean a second way to reach the same data and a second thing to keep in step.
+    /// <para>
+    /// There is no <see cref="EndpointBindingFailure.MissingBody"/> case here. An empty form is a
+    /// form with no fields, and whether that is acceptable is a question about the contract's own
+    /// nullability rather than about the body. JSON differs because a body that deserializes to null
+    /// produced no contract at all.
+    /// </para>
+    /// </remarks>
+    private static async ValueTask<EndpointBodyResult<T>> ReadFormAsync<T>(HttpContext context, EndpointBodyMode bodyMode)
+    {
+        // The framework's own definition of "this is a form", covering both form media types. Using
+        // it rather than comparing content-type literals is why this path accepts what the server
+        // accepts instead of a narrower guess.
+        var isForm = context.Request.HasFormContentType;
+        var declared = !string.IsNullOrWhiteSpace(context.Request.ContentType);
+        var unsupported = bodyMode switch
+        {
+            EndpointBodyMode.Optional => false,
+            EndpointBodyMode.RequiredWithContentType or EndpointBodyMode.OptionalWithContentType => !isForm,
+            _ => declared && !isForm
+        };
+
+        if (unsupported)
+        {
+            return new(false, default, new(default, EndpointBindingFailure.UnsupportedMediaType,
+                "The request content type must be multipart/form-data or application/x-www-form-urlencoded."), null);
+        }
+
+        if (!isForm)
+        {
+            // Nothing to read. Under a required mode this is a caller who sent no content type at
+            // all, which the JSON path also lets through to bind from route and query.
+            return new(true, default, default, null);
+        }
+
+        try
+        {
+            await context.Request.ReadFormAsync(context.RequestAborted);
+        }
+        catch (InvalidDataException exception)
+        {
+            // A malformed boundary or an exceeded multipart limit. Caught here because otherwise it
+            // reaches the mapper's catch-all and a caller error is reported as a 500.
+            return new(false, default, new(default, EndpointBindingFailure.MalformedBody, exception.Message), null);
+        }
+        catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            return new(false, default, new(default, EndpointBindingFailure.RequestTooLarge,
+                "The request body exceeds the configured size limit."), null);
+        }
+
+        return new(true, default, default, null);
+    }
+
     /// <summary>Binds a request contract from the route values, the query string, and the body.</summary>
     /// <remarks>
     /// Reflective, and annotated so a trimmed or AOT build says so rather than failing at runtime.
@@ -338,7 +432,8 @@ public static class EndpointRequestBinder
         // Body reading is shared with generated binders, so the media-type rules have exactly one
         // implementation and the two paths cannot drift apart. The supplied-property pass is skipped
         // only when the plan proves no member could consult it.
-        var read = await ReadBodyAsync<T>(context, jsonOptions, options.BodyMode, plan?.NeedsSuppliedProperties ?? true);
+        var read = await ReadBodyAsync<T>(
+            context, jsonOptions, options.BodyMode, plan?.NeedsSuppliedProperties ?? true, options.BodyKind);
         if (!read.Succeeded)
             return read.Failure;
 
@@ -350,7 +445,7 @@ public static class EndpointRequestBinder
         try
         {
             plan ??= Plans.GetValue(typeof(T), CreatePlan);
-            return new(BindContract<T>(plan, body, supplied, context, valueBinders, strict), null, null);
+            return new(BindContract<T>(plan, body, supplied, context, valueBinders, strict, options.BodyKind), null, null);
         }
         catch (EndpointStrictValueException failure)
         {
@@ -368,14 +463,15 @@ public static class EndpointRequestBinder
         IReadOnlySet<string>? supplied,
         HttpContext context,
         EndpointValueBinders? valueBinders,
-        bool strict)
+        bool strict,
+        EndpointBodyKind kind)
     {
         var parameters = plan.Parameters;
 
         // A contract declared with init-only properties rather than positional parameters is bound by
         // assignment: the deserialized body is kept and route values are applied over it.
         if (parameters.Length == 0)
-            return BindProperties<T>(plan, body, supplied, context, valueBinders, strict);
+            return BindProperties<T>(plan, body, supplied, context, valueBinders, strict, kind);
         var arguments = new object?[parameters.Length];
         var routeValues = context.Request.RouteValues;
         var query = context.Request.Query;
@@ -393,6 +489,14 @@ public static class EndpointRequestBinder
                 continue;
             }
 
+            // Before the route step: a file is never a route value, and letting Convert see one
+            // would throw the unsupported-type error rather than bind.
+            if (TryGetFormFile(context, name, parameter.ParameterType, out var file))
+            {
+                arguments[index] = file;
+                continue;
+            }
+
             if (TryGetRouteValue(routeValues, name, out var routeValue))
             {
                 arguments[index] = Convert(routeValue, parameter.ParameterType, name, valueBinders, strict);
@@ -403,6 +507,25 @@ public static class EndpointRequestBinder
             {
                 arguments[index] = ReadProperty(body, parameter, typeof(T));
                 continue;
+            }
+
+            // A form is the body, so it sits exactly where the JSON body sits and for the same
+            // reason: a value the caller put in the payload beats one they put in the query string.
+            // This must precede TryGetCollection, which claims every collection member whether or
+            // not the query actually carried the key.
+            if (ReadsForm(context, kind))
+            {
+                if (TryGetFormCollection(context.Request.Form, name, parameter.ParameterType, valueBinders, strict, out var formMany))
+                {
+                    arguments[index] = formMany;
+                    continue;
+                }
+
+                if (TryGetFormValue(context.Request.Form, name, out var formValue))
+                {
+                    arguments[index] = Convert(formValue, parameter.ParameterType, name, valueBinders, strict);
+                    continue;
+                }
             }
 
             if (TryGetCollection(query, name, parameter.ParameterType, valueBinders, strict, out var collection))
@@ -425,26 +548,54 @@ public static class EndpointRequestBinder
         return (T)plan.Constructor.Invoke(arguments);
     }
 
-    private static T BindProperties<T>(ContractPlan plan, object? body, IReadOnlySet<string>? supplied, HttpContext context, EndpointValueBinders? valueBinders, bool strict)
+    private static T BindProperties<T>(
+        ContractPlan plan,
+        object? body,
+        IReadOnlySet<string>? supplied,
+        HttpContext context,
+        EndpointValueBinders? valueBinders,
+        bool strict,
+        EndpointBodyKind kind)
     {
         var instance = body ?? Activator.CreateInstance(typeof(T))!;
         var routeValues = context.Request.RouteValues;
         var query = context.Request.Query;
 
+        // Whether a JSON body was actually read, which is not the same question as whether the
+        // supplied set is null. SuppliedByBody answers null with "yes, supplied", so on the form path
+        // — where both the body and the supplied set are null — guarding the query branches with it
+        // alone would skip every branch and bind nothing at all.
+        var readJson = kind is EndpointBodyKind.Json;
+        var readsForm = ReadsForm(context, kind);
+
         foreach (var (property, declared) in plan.Properties)
         {
             if (declared is not null)
                 property.SetValue(instance, BindDeclared(context, declared, property.Name, property.PropertyType, valueBinders, strict));
+            else if (TryGetFormFile(context, property.Name, property.PropertyType, out var file))
+                property.SetValue(instance, file);
             else if (TryGetRouteValue(routeValues, property.Name, out var routeValue))
                 property.SetValue(instance, Convert(routeValue, property.PropertyType, property.Name, valueBinders, strict));
-            else if (!SuppliedByBody(supplied, property.Name) && TryGetCollection(query, property.Name, property.PropertyType, valueBinders, strict, out var collection))
+            else if (readsForm && TryGetFormCollection(context.Request.Form, property.Name, property.PropertyType, valueBinders, strict, out var formMany))
+                property.SetValue(instance, formMany);
+            else if (readsForm && TryGetFormValue(context.Request.Form, property.Name, out var formValue))
+                property.SetValue(instance, Convert(formValue, property.PropertyType, property.Name, valueBinders, strict));
+            else if ((!readJson || !SuppliedByBody(supplied, property.Name)) && TryGetCollection(query, property.Name, property.PropertyType, valueBinders, strict, out var collection))
                 property.SetValue(instance, collection);
-            else if (!SuppliedByBody(supplied, property.Name) && TryGetQueryValue(query, property.Name, out var queryValue))
+            else if ((!readJson || !SuppliedByBody(supplied, property.Name)) && TryGetQueryValue(query, property.Name, out var queryValue))
                 property.SetValue(instance, Convert(queryValue, property.PropertyType, property.Name, valueBinders, strict));
         }
 
         return (T)instance;
     }
+
+    /// <summary>Whether this request's fields should be read from a form.</summary>
+    /// <remarks>
+    /// Gated on the declared kind, not on the content type alone: a JSON endpoint handed a form must
+    /// not quietly start binding from it just because the caller sent one.
+    /// </remarks>
+    private static bool ReadsForm(HttpContext context, EndpointBodyKind kind) =>
+        kind is EndpointBodyKind.Form && context.Request.HasFormContentType;
 
     private static ConstructorInfo SelectConstructor(Type type)
     {
@@ -590,6 +741,20 @@ public static class EndpointRequestBinder
                     ? BuildCollection(targetType, header!, memberName, valueBinders, strict)
                     : Convert(header.ToString(), targetType, memberName, valueBinders, strict);
 
+            case EndpointBindingSource.Form:
+                // Not gated on the declared kind: an explicit [FromForm] says what the author meant,
+                // and honouring it only when the kind happens to agree would make the attribute's
+                // behaviour depend on a setting in a different file.
+                if (TryGetFormFile(context, key, targetType, out var declaredFile))
+                    return declaredFile;
+                if (!context.Request.HasFormContentType)
+                    return Absent();
+                if (TryGetFormCollection(context.Request.Form, key, targetType, valueBinders, strict, out var formMany))
+                    return formMany;
+                return TryGetFormValue(context.Request.Form, key, out var formSingle)
+                    ? Convert(formSingle, targetType, memberName, valueBinders, strict)
+                    : Absent();
+
             case EndpointBindingSource.Claim:
                 // An unauthenticated request simply has no claims; that is an absent value, not a
                 // binding failure. Authorization decides whether absence is allowed.
@@ -619,6 +784,76 @@ public static class EndpointRequestBinder
             || definition == typeof(IList<>) || definition == typeof(IEnumerable<>) || definition == typeof(ICollection<>)
             ? type.GetGenericArguments()[0]
             : null;
+    }
+
+    /// <summary>
+    /// Binds a member whose type is a file rather than something parsed from a string.
+    /// </summary>
+    /// <remarks>
+    /// Must run before <see cref="Convert"/> and before the collection helpers. <see cref="ElementType"/>
+    /// happily reports <c>IFormFile</c> as the element of an <c>IFormFile[]</c>, and BuildCollection
+    /// would then ask Convert for an IFormFile from a string and throw the unsupported-type error.
+    /// </remarks>
+    private static bool TryGetFormFile(HttpContext context, string name, Type targetType, out object? value)
+    {
+        value = null;
+
+        // Ignores its own name on purpose: this is the shape that takes every file in the request.
+        if (targetType == typeof(IFormFileCollection))
+        {
+            value = EndpointValue.AllFiles(context);
+            return true;
+        }
+
+        if (targetType == typeof(IFormFile))
+        {
+            value = EndpointValue.File(context, name);
+            return true;
+        }
+
+        if (ElementType(targetType) != typeof(IFormFile))
+            return false;
+
+        var files = EndpointValue.Files(context, name);
+        value = targetType.IsArray ? files : new List<IFormFile>(files);
+        return true;
+    }
+
+    /// <summary>Reads the first value for a form field. The query twin of this is TryGetQueryValue.</summary>
+    /// <remarks>
+    /// Delegates the repeated-key rule to <see cref="EndpointValue.Scalar"/>, exactly as the query
+    /// lookup does, so a repeated form key and a repeated query key read the same way on both binders.
+    /// </remarks>
+    private static bool TryGetFormValue(IFormCollection form, string name, out string? value)
+    {
+        if (form.TryGetValue(name, out var entry))
+        {
+            value = EndpointValue.Scalar(entry);
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static bool TryGetFormCollection(
+        IFormCollection form,
+        string name,
+        Type targetType,
+        EndpointValueBinders? valueBinders,
+        bool strict,
+        out object? value)
+    {
+        value = null;
+        if (ElementType(targetType) is null)
+            return false;
+
+        // As with the query string, a collection member with no values present binds empty rather
+        // than null, so a handler can enumerate it without a null check.
+        value = form.TryGetValue(name, out var entries)
+            ? BuildCollection(targetType, entries!, name, valueBinders, strict)
+            : BuildCollection(targetType, [], name, valueBinders, strict);
+        return true;
     }
 
     private static bool TryGetCollection(

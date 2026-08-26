@@ -7,12 +7,16 @@ namespace NativeEndpoints.OpenApi;
 public static class NativeEndpointsOpenApiExtensions
 {
     /// <summary>
-    /// Documents the parameters NativeEndpoints operations bind. Call alongside <c>AddOpenApi</c>.
+    /// Documents the parameters NativeEndpoints operations bind, and the form fields they accept.
+    /// Call alongside <c>AddOpenApi</c>.
     /// </summary>
     public static IServiceCollection AddNativeEndpointsOpenApi(this IServiceCollection services, string documentName = "v1")
     {
         ArgumentNullException.ThrowIfNull(services);
         return services.Configure<OpenApiOptions>(documentName, options =>
-            options.AddOperationTransformer<EndpointParameterTransformer>());
+        {
+            options.AddOperationTransformer<EndpointParameterTransformer>();
+            options.AddOperationTransformer<EndpointFormRequestBodyTransformer>();
+        });
     }
 }

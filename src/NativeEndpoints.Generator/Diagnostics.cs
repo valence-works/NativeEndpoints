@@ -52,4 +52,13 @@ internal static class Diagnostics
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Every mapper dispatches through a handler method a base type declares, and ApiEndpointBase declares none. The generated registration excludes such a class, and the reflective scan throws for it at startup.");
+
+    internal static readonly DiagnosticDescriptor FormMemberWithoutBody = new(
+        "NE0006",
+        "Contract binds a form on a method with no request body",
+        "Contract '{0}' binds member '{1}' from a form, but '{2}' is mapped as {3}. A form is a request body, and a {3} request carries none, so this member would bind its default on every call.",
+        Category,
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A form field or file member on a bodyless method can never receive a value. Reported at build time rather than as a silently empty parameter on every request.");
 }

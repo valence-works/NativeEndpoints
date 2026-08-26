@@ -87,8 +87,21 @@ binder implicitly.
 That is a feature. A silent fallback to `default` is a bug you find in production; an exception is a
 bug you find on the first request.
 
-> Forms, multipart, and file upload are deliberately out of scope for 1.0. Use a plain `MapPost`
-> alongside your endpoints.
+**Files.** `IFormFile`, `IFormFile[]`, `List<IFormFile>`, and `IFormFileCollection` bind on a form
+endpoint. A file is not converted from a string, so none of the rules above apply to it. See
+[Forms](Forms.md).
+
+> Streaming multipart remains out of scope: reading a form buffers it. Use `MultipartReader` from a
+> plain `MapPost` alongside your endpoints.
+
+## Body kinds
+
+`options.BodyKind` decides what the body is read *as*, independently of whether one is required.
+
+| Kind | Behavior |
+|---|---|
+| `Json` | The contract is deserialized from a JSON body. The default |
+| `Form` | The contract is bound field by field from a multipart or URL-encoded form. See [Forms](Forms.md) |
 
 ## Body modes
 
@@ -172,6 +185,7 @@ an existing API returns.
 | `UnsupportedMediaType` | 415 |
 | `MissingBody` | 400 |
 | `MalformedBody` | 400, with the serializer's message under `serializerErrors` |
+| `RequestTooLarge` | 413 |
 | `InvalidTypedValue` | 400, naming the value. Only under strict parsing |
 
 Failures are written through the configured `IEndpointProblemWriter`. See [[Problem-Details]].

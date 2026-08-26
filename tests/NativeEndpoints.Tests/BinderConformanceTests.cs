@@ -30,6 +30,100 @@ public class BinderConformanceTests : IAsyncDisposable
         _generated = Host(group => group.Map());
     }
 
+    private static readonly Guid FormId = new("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+
+    /// <summary>
+    /// The form cases, keyed by name. A factory rather than a message, because every case is sent
+    /// twice — once per host — and an HttpRequestMessage cannot be reused.
+    /// </summary>
+    /// <remarks>
+    /// The boundary is fixed rather than the default random GUID, so both hosts receive byte-identical
+    /// requests and a failure reproduces.
+    /// </remarks>
+    private static readonly Dictionary<string, Func<HttpRequestMessage>> FormCases = new()
+    {
+        ["form:every-field"] = () => Multipart($"/upload/{FormId}",
+            ("Title", "hello"), ("Count", "3"), ("Tag", "x"), ("Note", "n"), ("legacy_name", "old")),
+
+        // Repeated keys. The reflective binder claims collection members before it reaches the query,
+        // so this is the case that catches a form step ordered after that claim.
+        ["form:repeated-key"] = () => Multipart($"/upload/{FormId}",
+            ("Title", "t"), ("Count", "1"), ("Tag", "a"), ("Tag", "b"), ("Tag", "c")),
+
+        // A repeated key bound to a scalar takes the first value, exactly as a repeated query key
+        // does — never the comma-join.
+        ["form:repeated-scalar"] = () => Multipart($"/upload/{FormId}",
+            ("Title", "FIRST"), ("Title", "second"), ("Count", "1")),
+
+        ["form:absent-collection"] = () => Multipart($"/upload/{FormId}", ("Title", "t"), ("Count", "1")),
+
+        // A form field cannot be null, so an empty field is the empty string as in the query string.
+        ["form:empty-value"] = () => Multipart($"/upload/{FormId}", ("Title", ""), ("Count", "")),
+
+        ["form:unreadable-number"] = () => Multipart($"/upload/{FormId}", ("Title", "t"), ("Count", "nonsense")),
+
+        // Mixed casing, to pin that a form collection matches keys the way the query one does.
+        ["form:mixed-case-key"] = () => Multipart($"/upload/{FormId}", ("TITLE", "shouty"), ("count", "2")),
+
+        // The route carries {id} and the form sends one too. Route precedence must still win.
+        ["form:route-beats-form"] = () => Multipart($"/upload/{FormId}",
+            ("Title", "t"), ("Count", "1"), ("Id", "99999999-9999-9999-9999-999999999999")),
+
+        // Absent from the form, present in the query: the fallthrough after the body step.
+        ["form:falls-through-to-query"] = () => Multipart($"/upload/{FormId}?Note=from-query",
+            ("Title", "t"), ("Count", "1")),
+
+        ["form:urlencoded"] = () => new(HttpMethod.Post, $"/upload/{FormId}")
+        {
+            Content = new FormUrlEncodedContent(
+                [new("Title", "t"), new("Count", "2"), new("Tag", "a"), new("Tag", "b")])
+        },
+
+        ["form:strict-ok"] = () => Multipart("/strict-form", ("Page", "7")),
+        ["form:strict-unreadable"] = () => Multipart("/strict-form", ("Page", "notanumber")),
+        ["form:strict-unreadable-guid"] = () => Multipart("/strict-form", ("Page", "7"), ("Filter", "not-a-guid")),
+
+        // A content type the endpoint does not accept. Routing answers this one, before the binder.
+        ["form:wrong-content-type"] = () => new(HttpMethod.Post, $"/upload/{FormId}")
+        {
+            Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json")
+        },
+
+        // Files. Each shape, and the absent case for each.
+        ["files:every-shape"] = () => Files(
+            ("Required", "req.txt"), ("Avatar", "face.png"),
+            ("Pages", "p1.pdf"), ("Pages", "p2.pdf"), ("Docs", "d1.doc")),
+
+        ["files:only-required"] = () => Files(("Required", "req.txt")),
+        ["files:none-at-all"] = () => Files(),
+        ["files:repeated-under-one-key"] = () => Files(
+            ("Required", "req.txt"), ("Pages", "a.pdf"), ("Pages", "b.pdf"), ("Pages", "c.pdf")),
+    };
+
+    private static HttpRequestMessage Multipart(string url, params (string Key, string Value)[] fields)
+    {
+        var content = new MultipartFormDataContent("conformance-boundary");
+        foreach (var (key, value) in fields)
+            content.Add(new StringContent(value), key);
+
+        return new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+    }
+
+    /// <summary>A multipart request carrying a Label field and the named files.</summary>
+    private static HttpRequestMessage Files(params (string Key, string FileName)[] files)
+    {
+        var content = new MultipartFormDataContent("conformance-boundary");
+        content.Add(new StringContent("batch"), "Label");
+        foreach (var (key, fileName) in files)
+        {
+            // Content derived from the name, so a file bound under the wrong key shows up as a
+            // different length rather than passing by coincidence.
+            content.Add(new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes(fileName + "-body")), key, fileName);
+        }
+
+        return new HttpRequestMessage(HttpMethod.Post, "/files") { Content = content };
+    }
+
     public static TheoryData<string> Requests() =>
     [
         "/probe/abc?tag=x&tag=y&page=1&page=2&slug=HELLO&price=12.50",
@@ -55,6 +149,26 @@ public class BinderConformanceTests : IAsyncDisposable
         "/strict?page=",
         "/strict?page=7&filter=",
         "/strict",
+
+        // Forms and files. Every branch of the inference chain, on both binders.
+        "form:every-field",
+        "form:repeated-key",
+        "form:repeated-scalar",
+        "form:absent-collection",
+        "form:empty-value",
+        "form:unreadable-number",
+        "form:mixed-case-key",
+        "form:route-beats-form",
+        "form:falls-through-to-query",
+        "form:urlencoded",
+        "form:strict-ok",
+        "form:strict-unreadable",
+        "form:strict-unreadable-guid",
+        "form:wrong-content-type",
+        "files:every-shape",
+        "files:only-required",
+        "files:none-at-all",
+        "files:repeated-under-one-key",
 
         // A repeated key on a strict scalar parses the first value; an unreadable first value is
         // rejected naming it, never the comma-join.
@@ -132,7 +246,9 @@ public class BinderConformanceTests : IAsyncDisposable
     private static async Task<(int Status, string Body)> Send(IHost host, string url)
     {
         using var client = host.GetTestClient();
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        var request = FormCases.TryGetValue(url, out var factory)
+            ? factory()
+            : new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("X-Tenant", "acme");
 
         var response = await client.SendAsync(request);

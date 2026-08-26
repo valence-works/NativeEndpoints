@@ -240,8 +240,9 @@ Choose NativeEndpoints when you want the endpoint-class shape and nothing else.
 | Escape hatch | `IEndpointConventionBuilder` | Framework-specific |
 | Registration | Generated, or explicit local scan | Process-global discovery |
 | Collectible unloading | Verified by a test you can run | Not supported |
-| Binding sources | Route, body, query, header, claim | Route, query, claim, form, body, header |
-| Forms and file upload | Not supported | Supported |
+| Binding sources | Route, body, query, header, claim, form | Route, query, claim, form, body, header |
+| Form bodies | Multipart and URL-encoded | Supported |
+| File upload | `IFormFile`, buffered | Supported |
 | Validation | Bring your own | FluentValidation, built in |
 | Package dependencies | None | Several |
 | Target frameworks | `net10.0` | Broad |
@@ -261,7 +262,9 @@ parity with a hand-written minimal API on both time and allocations.
 
 ## What it does not do
 
-- **Forms, multipart, and file upload.** Not in 1.0. Use a plain `MapPost` beside your endpoints.
+- **Streaming multipart.** Forms and `IFormFile` members bind — see [Forms](docs/Forms.md) — but
+  reading a form buffers it. A genuinely streaming upload wants `MultipartReader` from a plain
+  `MapPost` beside your endpoints.
 - **Validation.** Bring FluentValidation, `DataAnnotations`, or hand-written guards.
 - **Older target frameworks.** `net10.0` only. .NET 8 leaves support in November 2026 and a new
   library targeting it would ship dead code.
@@ -278,6 +281,7 @@ published from [`docs/`](docs) on every push to `main`.
 [Source generator](docs/Source-Generator.md) &middot;
 [Endpoint classes](docs/Endpoint-Classes.md) &middot;
 [Binding](docs/Binding.md) &middot;
+[Forms](docs/Forms.md) &middot;
 [Problem details](docs/Problem-Details.md) &middot;
 [Unload safety](docs/Unload-Safety.md) &middot;
 [Migrating from FastEndpoints](docs/Migrating-from-FastEndpoints.md)

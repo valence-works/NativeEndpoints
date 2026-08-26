@@ -54,6 +54,60 @@ public static class EndpointValue
     public static string?[] QueryValues(HttpContext context, string name) =>
         context.Request.Query.TryGetValue(name, out var value) ? [.. value] : [];
 
+    // Form lookups mirror the query ones exactly: TryGetValue rather than a scan, and Scalar rather
+    // than the comma-join, so a repeated form key reads the same as a repeated query key. A form
+    // collection is backed by an OrdinalIgnoreCase dictionary for the same reason the query one is.
+
+    /// <summary>Reads the first value for a form field, or null when the key is absent.</summary>
+    /// <remarks>
+    /// Safe to call unconditionally. A request that is not a form has no fields, so a form-bound
+    /// member simply binds absent rather than throwing, which is what lets the emitter write the form
+    /// branch without knowing the body kind at compile time.
+    /// <para>
+    /// Never blocks: the form was already parsed and cached onto the request by the binder before any
+    /// of this runs, so this is a dictionary lookup.
+    /// </para>
+    /// </remarks>
+    public static string? Form(HttpContext context, string name) =>
+        context.Request.HasFormContentType && context.Request.Form.TryGetValue(name, out var value)
+            ? Scalar(value)
+            : null;
+
+    /// <summary>Every value for a form field, in order.</summary>
+    public static string?[] FormValues(HttpContext context, string name) =>
+        context.Request.HasFormContentType && context.Request.Form.TryGetValue(name, out var value)
+            ? [.. value]
+            : [];
+
+    /// <summary>Whether the caller sent this form field, so an absent one falls through to the query.</summary>
+    /// <remarks>
+    /// The form's counterpart to <see cref="Supplied"/>, and simpler: a form collection answers
+    /// presence directly, where JSON needs the payload read a second time to tell an explicit null
+    /// from an omitted property. A form has no null to distinguish — an empty field is the empty
+    /// string, exactly as in the query string.
+    /// </remarks>
+    public static bool SuppliedByForm(HttpContext context, string name) =>
+        context.Request.HasFormContentType && context.Request.Form.ContainsKey(name);
+
+    /// <summary>The first uploaded file for a field, or null when there is none.</summary>
+    /// <remarks>Absent means null rather than an exception, matching every other source.</remarks>
+    public static IFormFile? File(HttpContext context, string name) =>
+        context.Request.HasFormContentType ? context.Request.Form.Files.GetFile(name) : null;
+
+    /// <summary>Every uploaded file for a field, in order.</summary>
+    public static IFormFile[] Files(HttpContext context, string name) =>
+        context.Request.HasFormContentType ? [.. context.Request.Form.Files.GetFiles(name)] : [];
+
+    /// <summary>Every uploaded file, whatever field name it arrived under.</summary>
+    /// <remarks>
+    /// For the upload whose field names are the caller's business rather than the contract's. Bound
+    /// to an <see cref="IFormFileCollection"/> member, the one shape that ignores its own name.
+    /// </remarks>
+    public static IFormFileCollection AllFiles(HttpContext context) =>
+        context.Request.HasFormContentType ? context.Request.Form.Files : EmptyFiles;
+
+    private static readonly IFormFileCollection EmptyFiles = new FormFileCollection();
+
     /// <summary>Reads a request header, or null when it is absent.</summary>
     /// <remarks>
     /// A multi-valued header deliberately keeps the comma-join of <c>StringValues.ToString()</c>:

@@ -102,6 +102,33 @@ public sealed class ApiEndpointOptions
     public EndpointBodyMode? BodyMode { get; set; }
 
     /// <summary>
+    /// What the request body is read as. Defaults to JSON.
+    /// </summary>
+    /// <remarks>
+    /// Setting this to <see cref="EndpointBodyKind.Form"/> also defaults <see cref="Accepts"/> to the
+    /// two form media types, and makes <see cref="RequireAntiforgery"/> mandatory.
+    /// </remarks>
+    public EndpointBodyKind BodyKind { get; set; } = EndpointBodyKind.Json;
+
+    /// <summary>
+    /// Whether the endpoint requires an antiforgery token. Has no default for a form endpoint: one
+    /// must be declared, or mapping throws.
+    /// </summary>
+    /// <remarks>
+    /// A form is the one request shape a browser can be tricked into sending cross-origin with the
+    /// user's cookies attached, so the stance cannot be inferred — a wrong guess is either a CSRF
+    /// hole or a machine-to-machine upload that suddenly 400s. Declaring it is one line, and it makes
+    /// the choice visible in the endpoint rather than in this library's defaults.
+    /// <para>
+    /// The metadata is inert unless the host has <c>app.UseAntiforgery()</c> in its pipeline.
+    /// <c>WebApplication</c> adds it automatically once <c>IAntiforgery</c> is registered; a manually
+    /// composed pipeline does not. Middleware presence is not observable from an endpoint convention,
+    /// so this library states the requirement and cannot enforce it.
+    /// </para>
+    /// </remarks>
+    public bool? RequireAntiforgery { get; set; }
+
+    /// <summary>
     /// Rejects a typed route, query, header, or claim value that does not parse, with a 400 naming
     /// it, rather than falling back to the parameter's default.
     /// </summary>

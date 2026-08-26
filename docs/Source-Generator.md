@@ -44,6 +44,7 @@ for anyone who cannot run the generator.
 | `NE0003` | `Configure` reads constructor-injected state, which is null at map time |
 | `NE0004` | A contract has more than one public constructor, so the binder will throw when the route is first called |
 | `NE0005` | Endpoint derives `ApiEndpointBase` directly, which no mapper can dispatch; derive the non-generic `ApiEndpoint` or one of the four contract shapes |
+| `NE0006` | A contract binds a form field or a file on a method that carries no request body |
 
 `NE0002` is the one that earns the generator its place. Without it, a contract parameter the binder
 cannot convert throws on the first request that reaches the route, in whichever environment reaches
@@ -52,6 +53,16 @@ it first. With it, the build says so.
 It is reported only for `GET` and `HEAD`. Everywhere else a contract member may come from the JSON
 body, where any serializable type is fine, and `Configure` can change the body mode in ways the
 generator cannot see. Reporting there would be noise.
+
+`NE0006` is reported under the same conservatism, and catches the opposite failure: the member binds
+perfectly well, there is simply never a body for it to bind from, so it would take its default on
+every request. A file member does not also trip `NE0002` — sending the reader looking for an
+`IParsable<IFormFile>` would be worse than saying nothing.
+
+There is deliberately **no** rule for a form endpoint that declares no antiforgery stance.
+`options.RequireAntiforgery` is set inside `Configure`, which is exactly the opaque override `NE0003`
+exists to warn about, so the generator cannot see it reliably. Mapping throws instead — which also
+covers the reflective path, where no analyzer runs at all.
 
 ## Registered value binders
 

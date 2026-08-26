@@ -189,7 +189,21 @@ public sealed class EndpointGroup
 
         var effectiveBodyMode = descriptor.BodyMode ?? DefaultBodyMode(descriptor.Method);
         var jsonOptions = _jsonOptions;
-        var bindingOptions = new EndpointBindingOptions(effectiveBodyMode, descriptor.StrictTypedParsing, _valueBinders);
+        // Eager, so a missing stance is a startup failure naming the operation rather than a CSRF
+        // hole discovered later. No analyzer can cover this: the stance is set inside Configure,
+        // which the generator reads only shallowly.
+        if (descriptor.BodyKind is EndpointBodyKind.Form && descriptor.RequireAntiforgery is null)
+        {
+            throw new InvalidOperationException(
+                $"Operation '{descriptor.Operation}' reads a form body but declares no antiforgery stance. " +
+                "Set options.RequireAntiforgery to true to validate a token, or false to opt out " +
+                "(the usual choice for a token-authenticated API). A form is the one request shape a " +
+                "browser can be made to send cross-origin with the user's cookies, so this library " +
+                "will not guess.");
+        }
+
+        var bindingOptions = new EndpointBindingOptions(
+            effectiveBodyMode, descriptor.StrictTypedParsing, _valueBinders, descriptor.BodyKind);
 
         RequestDelegate handler = async context =>
         {
@@ -253,10 +267,21 @@ public sealed class EndpointGroup
 
         var builder = _endpoints.MapMethods(descriptor.Pattern, [descriptor.Method], handler);
 
+        // The framework's own public IAntiforgeryMetadata implementation, rather than a parallel one.
+        // This is exactly what DisableAntiforgery() and [RequireAntiforgeryToken] put on an endpoint,
+        // so the antiforgery middleware needs no special case for endpoints mapped from here.
+        if (descriptor.RequireAntiforgery is { } stance)
+            builder.AddEndpointMetadata(new Microsoft.AspNetCore.Antiforgery.RequireAntiforgeryTokenAttribute(stance));
+
         // An endpoint may describe a request schema it does not bind from the body: several existing
         // GET operations advertise their request shape in the document while binding from the query.
         // Declaring accepts is therefore what decides the OpenAPI request type, not the body mode.
         var declaresRequest = descriptor.Accepts is not null || effectiveBodyMode is not EndpointBodyMode.None;
+
+        // Accepts must follow the kind. AcceptsMatcherPolicy uses this metadata during routing, so
+        // leaving the JSON default in place would reject every form request with a bare 415 before
+        // the binder's own rules ever ran.
+        var effectiveAccepts = descriptor.Accepts ?? DefaultAccepts(descriptor.BodyKind, effectiveBodyMode);
         _convention(builder, new EndpointOperationContext
         {
             GroupName = Name,
@@ -266,8 +291,9 @@ public sealed class EndpointGroup
             RequestType = declaresRequest ? typeof(TMessage) : null,
             ContractType = typeof(TMessage),
             ReadsBody = effectiveBodyMode is not EndpointBodyMode.None,
+            BodyKind = descriptor.BodyKind,
             ResponseType = descriptor.ResponseType,
-            Accepts = descriptor.Accepts,
+            Accepts = effectiveAccepts,
             SuccessStatus = descriptor.SuccessStatus,
             DocumentedStatus = descriptor.DocumentedStatus ?? descriptor.SuccessStatus,
             DocumentAuthResponses = descriptor.DocumentAuthResponses
@@ -468,7 +494,9 @@ public sealed class EndpointGroup
             SuccessStatus = options.SuccessStatus,
             DocumentedStatus = options.DocumentedStatus,
             DocumentAuthResponses = options.DocumentAuthResponses,
-            StrictTypedParsing = options.StrictTypedParsing
+            StrictTypedParsing = options.StrictTypedParsing,
+            BodyKind = options.BodyKind,
+            RequireAntiforgery = options.RequireAntiforgery
         };
 
     /// <summary>
@@ -477,6 +505,16 @@ public sealed class EndpointGroup
     /// </summary>
     private static EndpointOperationDescriptor DescribeNoContent(ApiEndpointOptions options) =>
         Describe(options, responseType: null) with { SuccessStatus = StatusCodes.Status204NoContent };
+
+    /// <summary>The content types an operation accepts when it did not name them itself.</summary>
+    /// <remarks>
+    /// Null for a JSON or bodyless operation, so the existing behaviour of leaving Accepts unset — and
+    /// letting the convention default it to application/json — is preserved exactly.
+    /// </remarks>
+    private static string[]? DefaultAccepts(EndpointBodyKind kind, EndpointBodyMode mode) =>
+        mode is not EndpointBodyMode.None && kind is EndpointBodyKind.Form
+            ? ["multipart/form-data", "application/x-www-form-urlencoded"]
+            : null;
 
     private static EndpointBodyMode DefaultBodyMode(string method) => method switch
     {
@@ -489,6 +527,8 @@ public sealed class EndpointGroup
     {
         EndpointBindingFailure.UnsupportedMediaType =>
             EndpointProblem.General(StatusCodes.Status415UnsupportedMediaType, binding.Message!),
+        EndpointBindingFailure.RequestTooLarge =>
+            EndpointProblem.General(StatusCodes.Status413PayloadTooLarge, binding.Message!),
         EndpointBindingFailure.MalformedBody =>
             EndpointProblem.General(StatusCodes.Status400BadRequest, binding.Message!, "serializerErrors"),
         // A failure that names its offending value — a strict-parsing rejection — is keyed by that
