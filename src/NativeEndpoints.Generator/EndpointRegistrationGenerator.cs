@@ -49,7 +49,15 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
         // CompilationProvider would re-run this output on every keystroke in the consuming project;
         // the name is a value-equatable string that almost never changes.
         var assemblyName = context.CompilationProvider.Select(static (compilation, _) => compilation.AssemblyName);
-        var collected = endpoints.Collect().Combine(assemblyName);
+
+        // Emission never reads Configure's diagnostic positions, but they participate in the
+        // model's equality, so a line shift inside a Configure body would re-run emission for a
+        // byte-identical file. Strip them from the emission input; the diagnostics node above
+        // keeps the full model, so the reported locations stay exact.
+        var collected = endpoints
+            .Select(static (model, _) => model with { ConfigureReads = default })
+            .Collect()
+            .Combine(assemblyName);
 
         context.RegisterSourceOutput(collected, static (production, source) =>
         {
