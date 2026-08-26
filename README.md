@@ -12,7 +12,7 @@ its metadata, and its handling. Ordinary ASP.NET Core underneath, all the way do
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4)
 
-> **Status: preview.** `1.0.0-preview.1` is on nuget.org. The API is settling but no longer moving
+> **Status: preview.** `1.0.0-preview.3` is on nuget.org. The API is settling but no longer moving
 > weekly; breaking changes before 1.0 are possible and are listed in the [changelog](CHANGELOG.md).
 
 ---

@@ -1,14 +1,18 @@
 # Changelog
 
-## 1.0.0-preview.2
+## 1.0.0-preview.3
 
-Two features the first real consumer needed, found by starting the migration rather than by guessing.
+A correctness release, driven by a full review of preview.2 rather than by new features.
 
-**Strict typed parsing.** `options.StrictTypedParsing` rejects a route or query value that does not
-parse, with a 400 naming it, instead of falling back to the parameter's default. Opt-in, because
-turning it on changes what an existing API returns. It also closes a hole in this library's own
-argument: the binder promised nothing misbinds silently, and then silently defaulted an unreadable
-number. Absence keeps its documented meaning on both binders: a nullable reference-type
+**Strict typed parsing now actually applies.** Preview.2 introduced `options.StrictTypedParsing`,
+but no mapping wrapper forwarded it, so the flag set in `Configure` never reached either binder —
+and the conformance suite could not see it, because it asserted only that the two binders agree,
+which they did, on being lenient. The flag is forwarded everywhere now, pinned by end-to-end tests
+asserting outcomes (`?page=notanumber` under strict is a 400 naming `page`), and strict mode is one
+rule across both binders: registered value binders, `IParsable<T>` fallbacks, and collection
+elements reject unreadable values the same way a scalar `int` does, where each previously defaulted
+silently on one path or the other. Strictness covers every source — route, query, header, and
+claim. Absence keeps its documented meaning on both binders: a nullable reference-type
 `IParsable<T>` member the caller omitted binds null even under strict parsing (the generated path
 gains the dedicated `EndpointValue.ParsableOrDefault<T>` converter for it, instead of `Parsable<T>`
 rejecting the absence), and a constructor-parameter default binds on absence whether or not the
@@ -16,10 +20,6 @@ member declares a `[From...]` source — `[FromQuery] int Page = 1` now agrees w
 lenient and strict alike. Contracts declaring constructor-parameter defaults are registered through
 the reflective mapper by the generated `Map()`, which honors them, rather than being emitted with
 the defaults silently dropped.
-
-**Explicit nulls are distinguishable from absent values.** The binder records which properties a
-request body actually contained, so a member sent as `null` stays null while an omitted one falls
-through to the query string. Previously both looked the same.
 
 **The write-your-own-response shape actually exists.** The docs promised five base types; the fifth
 was documented as deriving `ApiEndpointBase` directly, which the reflective scan rejected at startup
@@ -55,13 +55,7 @@ now names the offending type and the five supported bases instead of failing opa
   thirteen positional parameters; the old overload is gone. Every typed Map method now builds its
   descriptor from `ApiEndpointOptions` in one place, so a new option can no longer be silently
   dropped by a forwarding overload — which is exactly how `StrictTypedParsing` failed to apply in
-  preview.1. `MapHandler` and the generated `MapGenerated*` entry points are unchanged.
-- `EndpointBinder<T>` and `EndpointRequestBinder.BindAsync` take an `EndpointBindingOptions` record
-  rather than loose parameters. Binding has gained settings twice now; a record stops each addition
-  being a signature break.
-- `EndpointRequestBinder.ReadBodyAsync` returns `EndpointBodyResult<T>`, which carries the supplied
-  property names alongside the body.
-- Regenerate: binders emitted by preview.1 do not match the new delegate shape.
+  preview.2. `MapHandler` and the generated `MapGenerated*` entry points are unchanged.
 
 ### Changed
 
@@ -105,6 +99,31 @@ now names the offending type and the five supported bases instead of failing opa
   are consulted only while the response has not started, since they write responses.
 - `MapEndpointGroup` is marked `NoInlining` so the default group name, taken from
   `Assembly.GetCallingAssembly()`, cannot misreport the caller under JIT inlining.
+
+## 1.0.0-preview.2
+
+Two features the first real consumer needed, found by starting the migration rather than by guessing.
+
+**Strict typed parsing.** `options.StrictTypedParsing` rejects a route or query value that does not
+parse, with a 400 naming it, instead of falling back to the parameter's default. Opt-in, because
+turning it on changes what an existing API returns. It also closes a hole in this library's own
+argument: the binder promised nothing misbinds silently, and then silently defaulted an unreadable
+number. *(Preview.3 note: the flag was not forwarded by the mapping wrappers in this release, so it
+only took effect through a direct `MapOperation`/`BindAsync` call; setting it in `Configure` did
+nothing until preview.3.)*
+
+**Explicit nulls are distinguishable from absent values.** The binder records which properties a
+request body actually contained, so a member sent as `null` stays null while an omitted one falls
+through to the query string. Previously both looked the same.
+
+### Breaking
+
+- `EndpointBinder<T>` and `EndpointRequestBinder.BindAsync` take an `EndpointBindingOptions` record
+  rather than loose parameters. Binding has gained settings twice now; a record stops each addition
+  being a signature break.
+- `EndpointRequestBinder.ReadBodyAsync` returns `EndpointBodyResult<T>`, which carries the supplied
+  property names alongside the body.
+- Regenerate: binders emitted by preview.1 do not match the new delegate shape.
 
 ## 1.0.0-preview.1
 
