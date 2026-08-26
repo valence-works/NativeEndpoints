@@ -288,6 +288,9 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
         EndpointModel model,
         EquatableArray<string> boundTypes)
     {
+        if (model.Shape is EndpointShape.Unsupported)
+            production.ReportDiagnostic(Diagnostic.Create(Diagnostics.UnmappableBase, Location.None, model.DisplayName));
+
         if (!model.HasRoute && model.Shape is not EndpointShape.Unsupported)
             production.ReportDiagnostic(Diagnostic.Create(Diagnostics.MissingRoute, Location.None, model.DisplayName));
 

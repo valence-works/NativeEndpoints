@@ -12,8 +12,14 @@ internal static class Emitter
         var slot = $"Endpoint{index}";
         builder.AppendLine($"    private static class {slot}");
         builder.AppendLine("    {");
-        Binder(builder, endpoint);
-        builder.AppendLine();
+
+        // A raw endpoint binds nothing, so its slot is just the activator.
+        if (endpoint.Shape is not EndpointShape.Raw)
+        {
+            Binder(builder, endpoint);
+            builder.AppendLine();
+        }
+
         Activator(builder, endpoint, slot);
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -165,6 +171,9 @@ internal static class Emitter
             EndpointShape.RequestResult =>
                 $"group.MapGeneratedResult<{endpoint.QualifiedName}, {endpoint.RequestType}, {endpoint.ResponseType}>("
                 + $"options, {slot}.Bind, {slot}.Create, static (endpoint, request, token) => endpoint.HandleAsync(request, token));",
+            EndpointShape.Raw =>
+                $"group.MapRaw(options, static async context => {{ var endpoint = {slot}.Create(context.RequestServices); "
+                + "endpoint.HttpContext = context; await endpoint.HandleAsync(context.RequestAborted); });",
             _ => string.Empty
         };
 

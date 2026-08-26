@@ -108,7 +108,7 @@ than stamped onto public endpoints that can never return it.
 | `ApiEndpoint<TRequest>` | A request in, `204 No Content` out |
 | `ApiEndpointWithoutRequest<TResponse>` | No contract, a response body out |
 | `ApiEndpointWithResult<TRequest, TResponse>` | The status code is decided by the handler |
-| `ApiEndpointBase` | Write the response yourself |
+| `ApiEndpoint` | Write the response yourself |
 
 `ApiEndpointWithResult` covers operations whose status depends on what happened:
 

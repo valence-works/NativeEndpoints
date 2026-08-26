@@ -8,7 +8,7 @@
 | `ApiEndpoint<TRequest>` | `Task HandleAsync(TRequest, CancellationToken)` | `204 No Content` |
 | `ApiEndpointWithoutRequest<TResponse>` | `Task<TResponse> HandleAsync(CancellationToken)` | JSON body, no bound contract |
 | `ApiEndpointWithResult<TRequest, TResponse>` | `Task<EndpointResult<TResponse>> HandleAsync(TRequest, CancellationToken)` | JSON body, status from the result |
-| `ApiEndpointBase` | none | You write the response yourself |
+| `ApiEndpoint` | `Task HandleAsync(CancellationToken)` | You write the response yourself |
 
 ### Status decided by the handler
 
@@ -26,8 +26,25 @@ The documented schema stays `InvoiceView`. The wrapper never reaches the wire.
 
 ### Writing the response yourself
 
-Derive from `ApiEndpointBase` and use `HttpContext` directly. Reach for this when the response is not
-JSON at all: a file stream, an event stream, a redirect.
+Derive from the non-generic `ApiEndpoint` and use `HttpContext` directly. Reach for this when the
+response is not JSON at all: a file stream, an event stream, a redirect.
+
+```csharp
+[Get("invoices/{invoiceId}/pdf")]
+public sealed class Endpoint(IInvoicePdfStore store) : ApiEndpoint
+{
+    public override async Task HandleAsync(CancellationToken ct)
+    {
+        HttpContext.Response.ContentType = "application/pdf";
+        await store.CopyToAsync(HttpContext.Request.RouteValues["invoiceId"]!.ToString()!, HttpContext.Response.Body, ct);
+    }
+}
+```
+
+Nothing is bound and nothing is written on success — the handler owns the status code, the content
+type, and the body. The shared failure path still applies when it throws: fault renderers, then
+exception translators, then the sanitized 500. Deriving `ApiEndpointBase` directly is not mappable —
+it has no handler method for the pipeline to dispatch — and is reported as `NE0005` at build time.
 
 ## Route attributes
 

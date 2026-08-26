@@ -306,6 +306,22 @@ public sealed class EndpointGroup
             bind);
     }
 
+    /// <summary>Maps an options-described operation whose dispatch writes the response itself.</summary>
+    /// <remarks>
+    /// The raw path, shared by the reflective mapper and the generated registration for non-generic
+    /// <see cref="ApiEndpoint"/> classes. Nothing is bound and nothing is written on success — the
+    /// dispatch owns the response entirely — so no JSON response body is documented, and the
+    /// documented status is the runtime <see cref="ApiEndpointOptions.SuccessStatus"/> (200 unless
+    /// Configure changes it). The shared failure path — fault renderers, then exception translators,
+    /// then the sanitized 500 — applies when the dispatch throws.
+    /// </remarks>
+    public IEndpointConventionBuilder MapRaw(ApiEndpointOptions options, Func<HttpContext, Task> dispatch)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(dispatch);
+        return MapUnbound(Describe(options, responseType: null), dispatch);
+    }
+
     /// <summary>Maps an options-described operation returning a body. Used by the endpoint-class mapper.</summary>
     internal IEndpointConventionBuilder MapBody<TRequest, TResponse>(
         ApiEndpointOptions options,

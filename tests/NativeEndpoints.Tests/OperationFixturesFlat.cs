@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using NativeEndpoints;
 
 namespace Billing.Flat;
@@ -60,4 +61,31 @@ public sealed class LenientItemsEndpoint : ApiEndpoint<ItemsQuery, ItemsView>
 {
     public override Task<ItemsView> HandleAsync(ItemsQuery request, CancellationToken cancellationToken) =>
         Task.FromResult(new ItemsView(request.Price.Amount, request.Ids));
+}
+
+/// <summary>The raw shape: no contract, and the handler writes a non-JSON response itself.</summary>
+[NativeEndpoints.Get("raw-export")]
+public sealed class RawExportEndpoint : NativeEndpoints.ApiEndpoint
+{
+    public override async Task HandleAsync(CancellationToken cancellationToken)
+    {
+        HttpContext.Response.StatusCode = StatusCodes.Status202Accepted;
+        HttpContext.Response.ContentType = "text/plain; charset=utf-8";
+        await HttpContext.Response.WriteAsync("raw export", cancellationToken);
+    }
+}
+
+/// <summary>Thrown by <see cref="RawFailureEndpoint"/>; translated to a 409 in RawEndpointTests.</summary>
+public sealed class RawConflictException : Exception;
+
+/// <summary>A raw endpoint that throws, proving the shared failure path still applies.</summary>
+[NativeEndpoints.Get("raw-throw/{kind}")]
+public sealed class RawFailureEndpoint : NativeEndpoints.ApiEndpoint
+{
+    public override Task HandleAsync(CancellationToken cancellationToken) =>
+        throw HttpContext.Request.RouteValues["kind"] switch
+        {
+            "conflict" => new RawConflictException(),
+            _ => (Exception)new InvalidOperationException("sensitive connection string detail")
+        };
 }

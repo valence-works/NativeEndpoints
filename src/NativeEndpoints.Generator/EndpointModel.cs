@@ -75,7 +75,10 @@ internal enum EndpointShape
     /// <summary>ApiEndpointWithResult&lt;TRequest, TResponse&gt;</summary>
     RequestResult,
 
-    /// <summary>ApiEndpointBase, writing its own response. The generator cannot map these.</summary>
+    /// <summary>ApiEndpoint, non-generic: the handler writes the response itself.</summary>
+    Raw,
+
+    /// <summary>ApiEndpointBase directly, which no mapper can dispatch. Reported as NE0005 and excluded.</summary>
     Unsupported
 }
 
@@ -287,7 +290,14 @@ internal static class EndpointSymbols
         for (var current = type.BaseType; current is not null; current = current.BaseType)
         {
             if (current.TypeArguments.Length == 0)
+            {
+                // The raw base is the one non-generic base that is mappable; it derives
+                // ApiEndpointBase directly, so no generic base can hide behind it.
+                if (current.ToDisplayString() == "NativeEndpoints.ApiEndpoint")
+                    return (EndpointShape.Raw, null, null);
+
                 continue;
+            }
 
             var definition = current.ConstructedFrom.ToDisplayString();
             var arguments = current.TypeArguments

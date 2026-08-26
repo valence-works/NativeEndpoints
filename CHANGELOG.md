@@ -14,6 +14,16 @@ number.
 request body actually contained, so a member sent as `null` stays null while an omitted one falls
 through to the query string. Previously both looked the same.
 
+**The write-your-own-response shape actually exists.** The docs promised five base types; the fifth
+was documented as deriving `ApiEndpointBase` directly, which the reflective scan rejected at startup
+and the generator silently omitted. The shape is now the non-generic `ApiEndpoint`:
+`Task HandleAsync(CancellationToken)`, with the handler writing the response through `HttpContext`
+itself — nothing is bound, nothing is written on success, no JSON response body is documented, and
+the shared failure path (fault renderers, translators, sanitized 500) still applies. Both mapping
+paths support it, via the new public `EndpointGroup.MapRaw`. A class that still derives
+`ApiEndpointBase` directly gets diagnostic `NE0005` at build time, and the reflective scan's error
+now names the offending type and the five supported bases instead of failing opaquely.
+
 ### Breaking
 
 - `EndpointGroup.MapOperation<TMessage>` takes an `EndpointOperationDescriptor` record rather than

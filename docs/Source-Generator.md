@@ -43,6 +43,7 @@ for anyone who cannot run the generator.
 | `NE0002` | A contract parameter has a type the binder cannot produce from a request string |
 | `NE0003` | `Configure` reads constructor-injected state, which is null at map time |
 | `NE0004` | A contract has more than one public constructor, so the binder will throw when the route is first called |
+| `NE0005` | Endpoint derives `ApiEndpointBase` directly, which no mapper can dispatch; derive the non-generic `ApiEndpoint` or one of the four contract shapes |
 
 `NE0002` is the one that earns the generator its place. Without it, a contract parameter the binder
 cannot convert throws on the first request that reaches the route, in whichever environment reaches
