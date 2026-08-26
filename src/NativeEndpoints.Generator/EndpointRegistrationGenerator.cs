@@ -28,22 +28,32 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             .Select(static (model, _) => model!);
 
         // Types the assembly declares a runtime value binder for. The generator cannot see the
-        // registration call itself, so the attribute is how intent reaches the build.
+        // registration call itself, so the attribute is how intent reaches the build. Sorted and
+        // deduplicated into an EquatableArray so an unchanged declaration set compares equal and
+        // keeps the cached outputs alive.
         var declared = context.CompilationProvider.Select(static (compilation, _) =>
-            compilation.Assembly.GetAttributes()
+            (EquatableArray<string>)compilation.Assembly.GetAttributes()
                 .Where(attribute => attribute.AttributeClass?.ToDisplayString() == "NativeEndpoints.EndpointValueBinderAttribute")
                 .Select(attribute => attribute.ConstructorArguments.Length == 1 ? attribute.ConstructorArguments[0].Value as INamedTypeSymbol : null)
                 .Where(symbol => symbol is not null)
                 .Select(symbol => symbol!.ToDisplayString())
-                .ToImmutableHashSet());
+                .Distinct()
+                .OrderBy(name => name, System.StringComparer.Ordinal)
+                .ToImmutableArray());
 
-        var collected = endpoints.Collect().Combine(context.CompilationProvider).Combine(declared);
+        // Diagnostics run per endpoint, so an edit inside one class re-checks that class alone.
+        context.RegisterSourceOutput(endpoints.Combine(declared), static (production, source) =>
+            Report(production, source.Left, source.Right));
+
+        // Emission needs only the assembly name from the compilation. Combining the whole
+        // CompilationProvider would re-run this output on every keystroke in the consuming project;
+        // the name is a value-equatable string that almost never changes.
+        var assemblyName = context.CompilationProvider.Select(static (compilation, _) => compilation.AssemblyName);
+        var collected = endpoints.Collect().Combine(assemblyName);
 
         context.RegisterSourceOutput(collected, static (production, source) =>
         {
-            var ((models, compilation), boundTypes) = source;
-            foreach (var model in models)
-                Report(production, model, boundTypes);
+            var (models, assemblyName) = source;
 
             var mappable = models
                 .Where(model => model.HasRoute && model.Shape is not EndpointShape.Unsupported)
@@ -55,7 +65,7 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
 
             production.AddSource(
                 "NativeEndpointsRegistration.g.cs",
-                SourceText(compilation.AssemblyName ?? "Generated", mappable));
+                SourceText(assemblyName ?? "Generated", mappable));
         });
     }
 
@@ -143,7 +153,16 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             };
 
             if (reads_state && seen.Add(symbol!.Name))
-                reads.Add(new ConfigureRead(symbol.Name, identifier.GetLocation()));
+            {
+                // Captured as raw data rather than the Location itself, which holds its syntax tree
+                // and would keep the model from ever comparing equal across edits.
+                var location = identifier.GetLocation();
+                reads.Add(new ConfigureRead(
+                    symbol.Name,
+                    location.SourceTree?.FilePath ?? string.Empty,
+                    location.SourceSpan,
+                    location.GetLineSpan().Span));
+            }
         }
 
         return reads.ToImmutable();
@@ -267,7 +286,7 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
     private static void Report(
         SourceProductionContext production,
         EndpointModel model,
-        ImmutableHashSet<string> boundTypes)
+        EquatableArray<string> boundTypes)
     {
         if (!model.HasRoute && model.Shape is not EndpointShape.Unsupported)
             production.ReportDiagnostic(Diagnostic.Create(Diagnostics.MissingRoute, Location.None, model.DisplayName));

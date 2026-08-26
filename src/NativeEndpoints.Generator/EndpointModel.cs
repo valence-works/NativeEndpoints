@@ -6,6 +6,11 @@ using Microsoft.CodeAnalysis;
 namespace NativeEndpoints.Generator;
 
 /// <summary>One endpoint class, reduced to what the generator needs to emit a registration.</summary>
+/// <remarks>
+/// Every member compares by value — collections through <see cref="EquatableArray{T}"/>, because
+/// record equality over <see cref="ImmutableArray{T}"/> is reference equality — so the incremental
+/// pipeline can recognise an unchanged endpoint and skip regeneration.
+/// </remarks>
 internal sealed record EndpointModel(
     string QualifiedName,
     string DisplayName,
@@ -15,17 +20,31 @@ internal sealed record EndpointModel(
     bool HasRoute,
     string? HttpMethod,
     string? RoutePattern,
-    ImmutableArray<ContractParameter> Contract,
-    ImmutableArray<string> Dependencies,
-    ImmutableArray<string> RouteKeys,
+    EquatableArray<ContractParameter> Contract,
+    EquatableArray<string> Dependencies,
+    EquatableArray<string> RouteKeys,
     int PublicConstructorCount,
     string? ContractName,
     string Operation,
     bool Generatable,
-    ImmutableArray<ConfigureRead> ConfigureReads);
+    EquatableArray<ConfigureRead> ConfigureReads);
 
 /// <summary>A piece of instance state that Configure reads, and where it reads it.</summary>
-internal sealed record ConfigureRead(string Member, Location Location);
+/// <remarks>
+/// Holds the location's raw data rather than a <see cref="Microsoft.CodeAnalysis.Location"/>: a
+/// Location references its syntax tree and changes identity on every edit, which would poison the
+/// pipeline cache. The pieces here are value-equatable, and <see cref="Location"/> rebuilds the
+/// same file/line/column for the diagnostic at report time.
+/// </remarks>
+internal sealed record ConfigureRead(
+    string Member,
+    string FilePath,
+    Microsoft.CodeAnalysis.Text.TextSpan Span,
+    Microsoft.CodeAnalysis.Text.LinePositionSpan LineSpan)
+{
+    /// <summary>Rebuilds the report location from the captured data.</summary>
+    internal Location Location => Location.Create(FilePath, Span, LineSpan);
+}
 
 /// <summary>One contract member, and everything the emitter needs to read it without reflection.</summary>
 internal sealed record ContractParameter(
