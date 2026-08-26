@@ -46,8 +46,15 @@ public class EndpointResultTests : IAsyncDisposable
                     {
                         var group = endpoints.MapEndpointGroup("Results");
                         group.MapOperation<ResultProbe>(
-                            "GET", "result", "Get", EndpointBodyMode.None, null, typeof(ResultProbeView),
-                            StatusCodes.Status200OK, StatusCodes.Status201Created,
+                            new EndpointOperationDescriptor
+                            {
+                                Method = "GET",
+                                Pattern = "result",
+                                Operation = "Get",
+                                BodyMode = EndpointBodyMode.None,
+                                ResponseType = typeof(ResultProbeView),
+                                DocumentedStatus = StatusCodes.Status201Created
+                            },
                             async (context, request, _) =>
                             {
                                 var result = request.Created

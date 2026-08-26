@@ -50,9 +50,16 @@ public class AuthResponseDocumentationTests
     public void Forcing_documentation_on_documents_the_pair_without_authorization()
     {
         var endpoint = Build(group => group.MapOperation<AuthProbeEmpty>(
-            "GET", "forced-on", "ForcedOn", EndpointBodyMode.None, null, typeof(string),
-            StatusCodes.Status200OK, null, (_, _, _) => Task.CompletedTask,
-            documentAuthResponses: true));
+            new EndpointOperationDescriptor
+            {
+                Method = "GET",
+                Pattern = "forced-on",
+                Operation = "ForcedOn",
+                BodyMode = EndpointBodyMode.None,
+                ResponseType = typeof(string),
+                DocumentAuthResponses = true
+            },
+            (_, _, _) => Task.CompletedTask));
 
         Assert.Equal([401, 403], AuthStatuses(endpoint));
     }
@@ -61,9 +68,16 @@ public class AuthResponseDocumentationTests
     public void Forcing_documentation_off_suppresses_the_pair_despite_authorization()
     {
         var endpoint = Build(group => group.MapOperation<AuthProbeEmpty>(
-                "GET", "forced-off", "ForcedOff", EndpointBodyMode.None, null, typeof(string),
-                StatusCodes.Status200OK, null, (_, _, _) => Task.CompletedTask,
-                documentAuthResponses: false)
+                new EndpointOperationDescriptor
+                {
+                    Method = "GET",
+                    Pattern = "forced-off",
+                    Operation = "ForcedOff",
+                    BodyMode = EndpointBodyMode.None,
+                    ResponseType = typeof(string),
+                    DocumentAuthResponses = false
+                },
+                (_, _, _) => Task.CompletedTask)
             .RequireAuthorization());
 
         Assert.Empty(AuthStatuses(endpoint));

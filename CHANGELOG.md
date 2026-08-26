@@ -16,6 +16,11 @@ through to the query string. Previously both looked the same.
 
 ### Breaking
 
+- `EndpointGroup.MapOperation<TMessage>` takes an `EndpointOperationDescriptor` record rather than
+  thirteen positional parameters; the old overload is gone. Every typed Map method now builds its
+  descriptor from `ApiEndpointOptions` in one place, so a new option can no longer be silently
+  dropped by a forwarding overload — which is exactly how `StrictTypedParsing` failed to apply in
+  preview.1. `MapHandler` and the generated `MapGenerated*` entry points are unchanged.
 - `EndpointBinder<T>` and `EndpointRequestBinder.BindAsync` take an `EndpointBindingOptions` record
   rather than loose parameters. Binding has gained settings twice now; a record stops each addition
   being a signature break.
