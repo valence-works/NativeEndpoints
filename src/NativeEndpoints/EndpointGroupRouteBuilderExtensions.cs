@@ -48,21 +48,24 @@ public static class EndpointGroupRouteBuilderExtensions
 
         var services = endpoints.ServiceProvider;
 
+        var groupName = name
+            ?? Assembly.GetCallingAssembly().GetName().Name
+            ?? throw new InvalidOperationException("The calling assembly has no simple name; pass a group name explicitly.");
+
         // Fail at mapping time when the pipeline's services were never registered. Without this
         // check the omission only surfaces on the first binding failure or handler exception, where
         // WriteProblemAsync cannot resolve a problem writer and the caller's real 400 becomes an
-        // opaque 500. Only the unkeyed registration is checked: the keyed variant is optional
-        // per-group customization layered on top of it.
-        if (services.GetService<IEndpointProblemWriter>() is null)
+        // opaque 500. Either registration satisfies the check — the unkeyed writer that
+        // AddNativeEndpoints installs, or one keyed by this group's name — because those are
+        // exactly the two the failure path consults per request; a host composing only keyed
+        // per-group writers is a working configuration, not a misconfiguration.
+        if (services.GetService<IEndpointProblemWriter>() is null &&
+            (services as IKeyedServiceProvider)?.GetKeyedService(typeof(IEndpointProblemWriter), groupName) is null)
         {
             throw new InvalidOperationException(
                 "No IEndpointProblemWriter is registered. " +
                 "Call services.AddNativeEndpoints() before mapping an endpoint group.");
         }
-
-        var groupName = name
-            ?? Assembly.GetCallingAssembly().GetName().Name
-            ?? throw new InvalidOperationException("The calling assembly has no simple name; pass a group name explicitly.");
 
         var jsonOptions = jsonContext?.Options
             ?? services.GetService<IOptions<JsonOptions>>()?.Value.SerializerOptions

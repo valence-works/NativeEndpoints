@@ -17,6 +17,10 @@ public sealed record GetInvoice(string InvoiceId, bool IncludeLines = false);
 
 A type with more than one public constructor is rejected at bind time; the binder will not guess.
 
+A constructor parameter's declared default (`IncludeLines = false`) binds when no source supplies a
+value — whether or not the member declares its source with a `[From...]` attribute, and under
+strict parsing too: absence takes the default before strictness gets a say.
+
 ## Sources
 
 Route, body, and query participate in the default precedence. Headers and claims never do: reading
@@ -150,8 +154,10 @@ Strictness follows every conversion: a registered value binder that cannot read 
 collection element that does not parse are rejected the same way a scalar `int` is.
 
 Absent is not the same as unreadable. A nullable member the caller omitted is simply null, strict or
-not. A non-nullable typed member with no value is a failure under strict parsing, because the caller
-was required to send something readable and did not. A blank value (`?page=`) is not absent — the
+not — `Guid?` and a nullable reference type implementing `IParsable<T>` alike. A non-nullable typed
+member with no value is a failure under strict parsing, because the caller was required to send
+something readable and did not; a constructor-parameter default counts as a value, so `int Page = 1`
+binds `1` on absence instead of failing. A blank value (`?page=`) is not absent — the
 caller did send it — so it is rejected even for a nullable member. Types read only through a
 registered parser are the exception on absence: an absent value binds the type's default, and only a
 value the caller actually sent can fail.

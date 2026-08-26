@@ -72,6 +72,28 @@ public class BinderConformanceTests : IAsyncDisposable
         "/lenient-items?price=notmoney&ids=1&ids=notanumber",
         "/lenient-items?price=&ids=",
         "/lenient-items",
+
+        // A nullable reference-type IParsable member: absence binds null even under strict
+        // parsing, while a blank or unparseable value is rejected strictly and defaulted leniently.
+        "/strict-phone",
+        "/strict-phone?phone=",
+        "/strict-phone?phone=notaphone",
+        "/strict-phone?phone=555-0100",
+        "/lenient-phone",
+        "/lenient-phone?phone=",
+        "/lenient-phone?phone=notaphone",
+        "/lenient-phone?phone=555-0100",
+
+        // Contracts with constructor-parameter defaults fall back to the reflective mapper on the
+        // generated host; the responses must still be identical, absent and present alike.
+        "/defaulted",
+        "/defaulted?page=9",
+        "/declared-default",
+        "/declared-default?page=9",
+        "/declared-default?page=notanumber",
+        "/strict-declared-default",
+        "/strict-declared-default?page=9",
+        "/strict-declared-default?page=notanumber",
     ];
 
     [Theory]
@@ -83,6 +105,28 @@ public class BinderConformanceTests : IAsyncDisposable
 
         Assert.Equal(reflective.Status, generated.Status);
         Assert.Equal(reflective.Body, generated.Body);
+    }
+
+    [Fact]
+    public async Task A_property_bound_contract_keeps_the_body_through_both_binders()
+    {
+        // The exact probe from the review of the discarded-body bug: a contract with a
+        // parameterless constructor and settable properties must echo the body's values from both
+        // hosts, not the type's defaults. On the generated host this also proves the endpoint fell
+        // back to the reflective mapper rather than being emitted as `new TRequest()`.
+        var results = new List<(int Status, string Body)>();
+        foreach (var host in new[] { _reflective, _generated })
+        {
+            using var client = host.GetTestClient();
+            var response = await client.PostAsync("/widget-form", new StringContent(
+                """{"name":"widget","count":7}""", System.Text.Encoding.UTF8, "application/json"));
+            results.Add(((int)response.StatusCode, await response.Content.ReadAsStringAsync()));
+        }
+
+        Assert.Equal(results[0], results[1]);
+        Assert.Equal(200, results[0].Status);
+        Assert.Contains("\"name\":\"widget\"", results[0].Body, StringComparison.Ordinal);
+        Assert.Contains("\"count\":7", results[0].Body, StringComparison.Ordinal);
     }
 
     private static async Task<(int Status, string Body)> Send(IHost host, string url)

@@ -387,7 +387,9 @@ public static class EndpointRequestBinder
 
             if (parameter.Declared is { } declared)
             {
-                arguments[index] = BindDeclared(context, declared, name, parameter.ParameterType, valueBinders, strict);
+                arguments[index] = BindDeclared(
+                    context, declared, name, parameter.ParameterType, valueBinders, strict,
+                    parameter.HasDefaultValue, parameter.DefaultValue);
                 continue;
             }
 
@@ -492,12 +494,9 @@ public static class EndpointRequestBinder
     {
         if (query.TryGetValue(name, out var entry))
         {
-            // A repeated key bound to a scalar takes the first value. StringValues.ToString()
-            // comma-joins ("?page=1&page=2" becomes "1,2"), which no scalar sensibly means: it
-            // fails to parse, and under the lenient default that silently bound the type's zero.
-            // (Minimal APIs comma-join here too and therefore answer a bare 400 for typed scalars;
-            // that join is not behavior worth matching.) Headers stay joined — see BindDeclared.
-            value = entry.Count > 1 ? entry[0] : entry.ToString();
+            // The first value, never the comma-join; the rule and its rationale live in
+            // EndpointValue.Scalar, shared with the generated binder so the two cannot drift.
+            value = EndpointValue.Scalar(entry);
             return true;
         }
 
@@ -554,26 +553,35 @@ public static class EndpointRequestBinder
         string memberName,
         Type targetType,
         EndpointValueBinders? valueBinders,
-        bool strict)
+        bool strict,
+        bool hasDefaultValue = false,
+        object? defaultValue = null)
     {
+        // When the declared source has no value at all, a declared constructor default binds first
+        // — lenient and strict alike — before AbsentValue can decide absence is a failure. This is
+        // the same ordering the undeclared fallthrough path uses (default, then AbsentValue), so
+        // `[FromQuery] int Page = 1` and `int Page = 1` agree on absence. A value the caller did
+        // send still converts, and strict parsing still rejects it when it cannot be read.
+        object? Absent() => hasDefaultValue ? defaultValue : AbsentValue(targetType, memberName, strict);
+
         var key = declared.Name ?? memberName;
         switch (declared.Source)
         {
             case EndpointBindingSource.Route:
                 return TryGetRouteValue(context.Request.RouteValues, key, out var route)
                     ? Convert(route, targetType, memberName, valueBinders, strict)
-                    : AbsentValue(targetType, memberName, strict);
+                    : Absent();
 
             case EndpointBindingSource.Query:
                 if (TryGetCollection(context.Request.Query, key, targetType, valueBinders, strict, out var many))
                     return many;
                 return TryGetQueryValue(context.Request.Query, key, out var single)
                     ? Convert(single, targetType, memberName, valueBinders, strict)
-                    : AbsentValue(targetType, memberName, strict);
+                    : Absent();
 
             case EndpointBindingSource.Header:
                 if (!context.Request.Headers.TryGetValue(key, out var header))
-                    return AbsentValue(targetType, memberName, strict);
+                    return Absent();
                 // Unlike a repeated query key, a multi-valued header deliberately keeps the
                 // comma-join of StringValues.ToString(): HTTP defines a repeated field as
                 // equivalent to one comma-separated field (RFC 9110 §5.3), so the join IS the
@@ -589,7 +597,7 @@ public static class EndpointRequestBinder
                 if (ElementType(targetType) is not null)
                     return BuildCollection(targetType, claims, memberName, valueBinders, strict);
                 return claims.Length == 0
-                    ? AbsentValue(targetType, memberName, strict)
+                    ? Absent()
                     : Convert(claims[0], targetType, memberName, valueBinders, strict);
 
             default:

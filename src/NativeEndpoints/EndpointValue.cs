@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Primitives;
 using System.Globalization;
 
 namespace NativeEndpoints;
@@ -32,15 +33,22 @@ public static class EndpointValue
         context.Request.RouteValues.TryGetValue(name, out var value) ? value?.ToString() : null;
 
     /// <summary>Reads the first value for a query key, or null when the key is absent.</summary>
-    /// <remarks>
-    /// First, not joined: <c>StringValues.ToString()</c> comma-joins a repeated key, and no scalar
-    /// sensibly means "1,2" — it fails to parse and, leniently, silently bound the type's zero.
-    /// Headers keep the join (see <see cref="Header"/>); query strings have no such semantics.
-    /// </remarks>
+    /// <remarks>First, not joined — the rule and its rationale live on <see cref="Scalar"/>.</remarks>
     public static string? Query(HttpContext context, string name) =>
-        context.Request.Query.TryGetValue(name, out var value)
-            ? value.Count > 1 ? value[0] : value.ToString()
-            : null;
+        context.Request.Query.TryGetValue(name, out var value) ? Scalar(value) : null;
+
+    /// <summary>The scalar reading of one query entry: the first value, never the comma-join.</summary>
+    /// <remarks>
+    /// The one place the repeated-scalar rule lives; the reflective binder's query lookup delegates
+    /// here so the two binders cannot drift. <c>StringValues.ToString()</c> comma-joins a repeated
+    /// key (<c>?page=1&amp;page=2</c> becomes "1,2"), and no scalar sensibly means "1,2": it fails
+    /// to parse and, under the lenient default, silently bound the type's zero. (Minimal APIs
+    /// comma-join here too and therefore answer a bare 400 for typed scalars; that join is an
+    /// accident of <c>StringValues.ToString()</c>, not behavior worth matching.) Headers keep the
+    /// join deliberately — see <see cref="Header"/>; query strings have no such semantics.
+    /// </remarks>
+    internal static string? Scalar(StringValues value) =>
+        value.Count > 1 ? value[0] : value.ToString();
 
     /// <summary>Every value for a query key, in order.</summary>
     public static string?[] QueryValues(HttpContext context, string name) =>
@@ -158,6 +166,21 @@ public static class EndpointValue
         : T.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : Reject<T>(raw, strict, name, typeof(T).Name);
 
     public static T? NullableParsable<T>(string? raw, bool strict = false, string? name = null) where T : struct, IParsable<T> =>
+        raw is null ? null
+        : Absent(raw) ? Reject<T?>(raw, strict, name, typeof(T).Name)
+        : T.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : Reject<T?>(raw, strict, name, typeof(T).Name);
+
+    /// <summary>
+    /// As <see cref="Parsable{T}"/>, for a reference type the contract declares nullable (<c>T?</c>).
+    /// </summary>
+    /// <remarks>
+    /// The reference-type sibling of <see cref="NullableParsable{T}"/> — a distinct name because the
+    /// two cannot overload on their constraints — with exactly its rules: an absent value binds null
+    /// even under strict parsing, because a nullable member the caller omitted is simply null; a
+    /// blank value is one the caller did send, so strict parsing rejects it; and an unparseable
+    /// value is rejected under strict parsing or binds null under the lenient default.
+    /// </remarks>
+    public static T? ParsableOrDefault<T>(string? raw, bool strict = false, string? name = null) where T : class, IParsable<T> =>
         raw is null ? null
         : Absent(raw) ? Reject<T?>(raw, strict, name, typeof(T).Name)
         : T.TryParse(raw, CultureInfo.InvariantCulture, out var value) ? value : Reject<T?>(raw, strict, name, typeof(T).Name);

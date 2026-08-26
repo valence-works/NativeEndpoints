@@ -58,7 +58,8 @@ internal sealed record ContractParameter(
     bool IsList,
     string? DeclaredSource,
     string? DeclaredKey,
-    bool SuppressNull);
+    bool SuppressNull,
+    bool HasDefaultValue);
 
 /// <summary>Which base an endpoint derives from, and therefore how it is mapped.</summary>
 internal enum EndpointShape
@@ -198,10 +199,21 @@ internal static class EndpointSymbols
     /// <summary>The EndpointValue call that converts a raw string into this type.</summary>
     internal static string? Converter(ITypeSymbol type)
     {
-        var nullable = type is INamedTypeSymbol { IsGenericType: true } candidate &&
-                       candidate.ConstructedFrom.SpecialType == SpecialType.System_Nullable_T;
-        var underlying = nullable ? ((INamedTypeSymbol)type).TypeArguments[0] : type;
-        var prefix = nullable ? "Nullable" : string.Empty;
+        var nullableValue = type is INamedTypeSymbol { IsGenericType: true } candidate &&
+                            candidate.ConstructedFrom.SpecialType == SpecialType.System_Nullable_T;
+
+        // A nullable-ANNOTATED reference type ("Phone?") is not Nullable<T>: the annotation only
+        // decorates the symbol and its display string. Strip it so "string?" still matches the
+        // string case below, and remember it so a nullable reference IParsable maps to the
+        // converter that treats absence as null — Parsable<T> rejects absence under strict
+        // parsing, which would 400 a member the docs promise "is simply null" when omitted.
+        var nullableReference = !nullableValue &&
+            type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated };
+
+        var underlying = nullableValue ? ((INamedTypeSymbol)type).TypeArguments[0]
+            : nullableReference ? type.WithNullableAnnotation(NullableAnnotation.NotAnnotated)
+            : type;
+        var prefix = nullableValue ? "Nullable" : string.Empty;
 
         switch (underlying.ToDisplayString())
         {
@@ -218,7 +230,15 @@ internal static class EndpointSymbols
             return $"{prefix}Enum<{qualified}>";
 
         if (underlying.AllInterfaces.Any(item => item.ConstructedFrom.ToDisplayString() == "System.IParsable<TSelf>"))
-            return nullable ? $"NullableParsable<{qualified}>" : $"Parsable<{qualified}>";
+        {
+            // A NON-nullable reference IParsable stays Parsable<T>, the known remaining corner:
+            // under strict parsing the generated converter rejects absence while the reflective
+            // binder (whose RejectsAbsence covers value types only) binds null. Kept deliberately —
+            // silently changing the reflective binder's answer would be worse than the asymmetry.
+            return nullableValue ? $"NullableParsable<{qualified}>"
+                : nullableReference ? $"ParsableOrDefault<{qualified}>"
+                : $"Parsable<{qualified}>";
+        }
 
         return null;
     }

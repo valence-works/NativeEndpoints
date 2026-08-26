@@ -81,6 +81,22 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
         var pattern = EndpointSymbols.RoutePattern(type);
         var routeKeys = RouteKeys(pattern);
 
+        // A request contract whose single public constructor takes no parameters is bound by
+        // property assignment: the reflective BindProperties keeps the deserialized body and lays
+        // route, query, and declared sources over it. The emitter's `new TRequest()` cannot do
+        // that — it would silently discard every deserialized body value — so these fall back to
+        // the reflective mapper. Only a real request contract triggers this: the no-request shapes
+        // (ResponseOnly, Raw) have no contract at all (ContractName is null) and stay generatable.
+        var propertyBound = contract.Name is not null && contract.ConstructorCount == 1 &&
+                            contract.Parameters.Length == 0;
+
+        // A constructor-parameter default (`int Page = 3`) is a compile-time constant the emitter
+        // would have to re-literalize correctly for every supported type (enums, decimals, nested
+        // nullables, ...); getting one wrong would misbind silently. The reflective binder reads
+        // ParameterInfo.DefaultValue at bind time and is correct today, so any defaulted parameter
+        // sends the whole contract down the reflective path instead.
+        var hasDefaultedParameter = contract.Parameters.Any(parameter => parameter.HasDefaultValue);
+
         // Generatable only when everything is statically knowable: one constructor on both the
         // endpoint and its contract, and a conversion for every member the binder must produce from
         // a string. Anything else falls back to the reflective path, which handles it correctly.
@@ -88,6 +104,8 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             shape is not EndpointShape.Unsupported &&
             pattern is not null &&
             contract.ConstructorCount == 1 &&
+            !propertyBound &&
+            !hasDefaultedParameter &&
             EndpointSymbols.HasSingleConstructor(type) &&
             contract.Parameters.All(parameter => IsEmittable(parameter, routeKeys));
 
@@ -269,7 +287,8 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             isList,
             source,
             key,
-            parameter.Type is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated });
+            parameter.Type is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated },
+            parameter.HasExplicitDefaultValue);
     }
 
     private static bool IsBindFrom(INamedTypeSymbol? attributeClass)

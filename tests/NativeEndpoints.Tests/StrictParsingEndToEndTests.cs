@@ -57,6 +57,33 @@ public class StrictParsingEndToEndTests : IAsyncDisposable
         { "/strict?page=1&page=2", 200, new[] { "\"page\":1" } },
         { "/strict?page=notanumber&page=2", 400, new[] { "\"page\"", "Value [notanumber] is not valid for a [Int32] property!" } },
         { "/lenient-items?price=12.50&price=99&ids=1", 200, new[] { "\"price\":12.50", "\"ids\":[1]" } },
+
+        // A nullable reference-type IParsable member the caller omitted is simply null, strict or
+        // not — the docs/Binding.md promise. Blank is not absent, and unparseable is unreadable:
+        // both are strict failures, and both bind null under the lenient default.
+        { "/strict-phone", 200, new[] { "\"phone\":null" } },
+        { "/strict-phone?phone=", 400, new[] { "\"phone\"", "Value [] is not valid for a [ReviewPhone] property!" } },
+        { "/strict-phone?phone=notaphone", 400, new[] { "\"phone\"", "Value [notaphone] is not valid for a [ReviewPhone] property!" } },
+        { "/strict-phone?phone=555-0100", 200, new[] { "\"phone\":\"555-0100\"" } },
+        { "/lenient-phone", 200, new[] { "\"phone\":null" } },
+        { "/lenient-phone?phone=", 200, new[] { "\"phone\":null" } },
+        { "/lenient-phone?phone=notaphone", 200, new[] { "\"phone\":null" } },
+        { "/lenient-phone?phone=555-0100", 200, new[] { "\"phone\":\"555-0100\"" } },
+
+        // A constructor-parameter default binds on absence through both mapping paths — the
+        // generated Map() registers the contract reflectively, which is what makes this hold.
+        { "/defaulted", 200, new[] { "\"page\":3" } },
+        { "/defaulted?page=9", 200, new[] { "\"page\":9" } },
+
+        // The same with the source declared: [FromQuery] int Page = 1 binds its default on
+        // absence, lenient and strict alike, while a sent-but-unreadable value still converts —
+        // leniently to the type's zero (not the declared default), strictly to a 400 naming it.
+        { "/declared-default", 200, new[] { "\"page\":1" } },
+        { "/declared-default?page=9", 200, new[] { "\"page\":9" } },
+        { "/declared-default?page=notanumber", 200, new[] { "\"page\":0" } },
+        { "/strict-declared-default", 200, new[] { "\"page\":1" } },
+        { "/strict-declared-default?page=9", 200, new[] { "\"page\":9" } },
+        { "/strict-declared-default?page=notanumber", 400, new[] { "\"page\"", "Value [notanumber] is not valid for a [Int32] property!" } },
     };
 
     [Theory]

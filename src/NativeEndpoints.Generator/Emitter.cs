@@ -35,7 +35,7 @@ internal static class Emitter
         // flag, keeping the emitted conversion identical to the captured lambda it replaces.
         foreach (var parameter in contract.Where(item => item.IsArray || item.IsList))
         {
-            var converter = Converter(parameter.ElementConverter!);
+            var converter = parameter.ElementConverter!;
             builder.AppendLine($"        private static readonly global::System.Func<string?, {parameter.ElementTypeName}> Convert{parameter.Name}Strict =");
             builder.AppendLine($"            static raw => global::NativeEndpoints.EndpointValue.{converter}(raw, true, \"{parameter.Name}\")!;");
             builder.AppendLine($"        private static readonly global::System.Func<string?, {parameter.ElementTypeName}> Convert{parameter.Name}Lenient =");
@@ -130,24 +130,13 @@ internal static class Emitter
         var raw = $"global::NativeEndpoints.EndpointValue.{source}(context, \"{key}\")";
         var converted = string.IsNullOrEmpty(parameter.Converter)
             ? $"global::NativeEndpoints.EndpointValue.Registered<{parameter.TypeName}>({raw}, valueBinders, strict, \"{parameter.Name}\")"
-            : $"global::NativeEndpoints.EndpointValue.{Converter(parameter.Converter)}({raw}, strict, \"{parameter.Name}\")";
+            : $"global::NativeEndpoints.EndpointValue.{parameter.Converter}({raw}, strict, \"{parameter.Name}\")";
 
         // The reflective binder can genuinely produce null for an absent value bound to a
         // non-nullable reference parameter. The generated equivalent says so rather than pretending
         // otherwise, so the two behave identically.
         return parameter.SuppressNull ? converted + "!" : converted;
     }
-
-    /// <summary>The converter a member is actually read with.</summary>
-    /// <remarks>
-    /// A nullable <c>string?</c> reaches the model as <c>Parsable&lt;string&gt;</c>: its display
-    /// string carries the annotation, so it misses the model's <c>string</c> case and falls through
-    /// to <c>IParsable</c>, which <c>string</c> implements. Parsable rejects an absent or blank
-    /// value under strict parsing; the reflective binder converts every string with the identity
-    /// conversion, so the emitted code must too.
-    /// </remarks>
-    private static string Converter(string converter) =>
-        converter == "Parsable<string>" ? "String" : converter;
 
     /// <summary>An activator that news the endpoint up directly from request services.</summary>
     private static void Activator(StringBuilder builder, EndpointModel endpoint, string slot)

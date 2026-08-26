@@ -8,7 +8,14 @@ Two features the first real consumer needed, found by starting the migration rat
 parse, with a 400 naming it, instead of falling back to the parameter's default. Opt-in, because
 turning it on changes what an existing API returns. It also closes a hole in this library's own
 argument: the binder promised nothing misbinds silently, and then silently defaulted an unreadable
-number.
+number. Absence keeps its documented meaning on both binders: a nullable reference-type
+`IParsable<T>` member the caller omitted binds null even under strict parsing (the generated path
+gains the dedicated `EndpointValue.ParsableOrDefault<T>` converter for it, instead of `Parsable<T>`
+rejecting the absence), and a constructor-parameter default binds on absence whether or not the
+member declares a `[From...]` source — `[FromQuery] int Page = 1` now agrees with `int Page = 1`,
+lenient and strict alike. Contracts declaring constructor-parameter defaults are registered through
+the reflective mapper by the generated `Map()`, which honors them, rather than being emitted with
+the defaults silently dropped.
 
 **Explicit nulls are distinguishable from absent values.** The binder records which properties a
 request body actually contained, so a member sent as `null` stays null while an omitted one falls
@@ -77,8 +84,15 @@ now names the offending type and the five supported bases instead of failing opa
 - A host that never called `AddNativeEndpoints()` now fails at `MapEndpointGroup` time with the
   remedy in the message, instead of surfacing on the first binding failure or handler exception at
   runtime — where the unresolvable `IEndpointProblemWriter` turned the caller's real 400 into an
-  opaque 500. Only the unkeyed registration is checked; the keyed variant remains optional
-  per-group customization.
+  opaque 500. The check accepts either the unkeyed registration or a writer keyed by the group's
+  own name — exactly the pair the failure path resolves per request — so a host composing only
+  keyed per-group writers keeps mapping as it always did.
+- The generated binder for a property-bound contract — a parameterless constructor with settable
+  properties — constructed an empty instance and silently discarded every deserialized body value,
+  answering the type's defaults where the reflective binder answered the caller's payload. Such
+  contracts are no longer generated: the generated `Map()` registers them through the reflective
+  mapper, whose property-assignment path binds them correctly, and the conformance suite now posts
+  a body through both mapping paths to pin it.
 - A handler (or the serializer mid-write) that throws after the response has started streaming no
   longer triggers a secondary `InvalidOperationException` from the problem writer setting the
   status on a started response. The pipeline logs the original exception and aborts the connection

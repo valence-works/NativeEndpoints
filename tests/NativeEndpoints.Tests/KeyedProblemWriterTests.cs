@@ -8,6 +8,19 @@ using Xunit;
 
 namespace NativeEndpoints.Tests;
 
+/// <summary>A strict endpoint whose 400 exercises the problem writer.</summary>
+[Get("solo-strict")]
+public sealed class StrictPageEndpoint : ApiEndpoint<StrictPage, string>
+{
+    public override void Configure(ApiEndpointOptions options) => options.StrictTypedParsing = true;
+
+    public override Task<string> HandleAsync(StrictPage request, CancellationToken cancellationToken) =>
+        Task.FromResult($"page:{request.Page}");
+}
+
+/// <summary>The request contract for <see cref="StrictPageEndpoint"/>.</summary>
+public sealed record StrictPage(int Page);
+
 /// <summary>
 /// A host composing several modules keeps each module's own error shape: the problem writer keyed by
 /// the group name is preferred, and the unkeyed registration remains the single-module fallback.
@@ -65,6 +78,37 @@ public class KeyedProblemWriterTests : IAsyncDisposable
 
         Assert.Equal(500, (int)response.StatusCode);
         Assert.Equal("keyed", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task A_keyed_only_registration_maps_and_serves_failures_through_the_keyed_writer()
+    {
+        // No AddNativeEndpoints, so no unkeyed writer: only the writer keyed by the group's own
+        // name. This configuration worked before the map-time fail-fast existed — the per-request
+        // resolution prefers the keyed writer — so mapping must accept it rather than throw.
+        using var host = new HostBuilder()
+            .ConfigureWebHost(web => web
+                .UseTestServer()
+                .ConfigureServices(services =>
+                {
+                    services.AddRouting();
+                    services.AddKeyedSingleton<IEndpointProblemWriter>("Solo", new TaggedWriter("solo"));
+                })
+                .Configure(app =>
+                {
+                    app.UseRouting();
+                    app.UseEndpoints(endpoints =>
+                        endpoints.MapEndpointGroup("Solo").MapEndpoint<StrictPageEndpoint>());
+                }))
+            .Start();
+
+        using var client = host.GetTestClient();
+        var response = await client.GetAsync("/solo-strict?page=notanumber");
+
+        Assert.Equal(400, (int)response.StatusCode);
+        Assert.Equal("solo", await response.Content.ReadAsStringAsync());
+
+        await host.StopAsync();
     }
 
     [Fact]
