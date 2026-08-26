@@ -12,3 +12,4 @@ artifacts/
 
 # Drafts live outside the repository until they are deliberately published.
 blog/
+BenchmarkDotNet.Artifacts/
