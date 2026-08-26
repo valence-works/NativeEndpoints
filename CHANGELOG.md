@@ -56,11 +56,37 @@ now names the offending type and the five supported bases instead of failing opa
   property names alongside the body.
 - Regenerate: binders emitted by preview.1 do not match the new delegate shape.
 
+### Changed
+
+- A repeated query key bound to a scalar (`?page=1&page=2` into an `int`) binds the first value.
+  Previously the values were comma-joined ("1,2"), which failed to parse and — under the lenient
+  default — silently bound the type's zero, contradicting the promise that nothing misbinds
+  silently; under strict parsing the join was rejected naming "1,2", a value the caller never
+  sent. A single value binds exactly as before, and both binders agree — the conformance suite
+  pins it. For comparison, minimal APIs comma-join here too, so a typed scalar answers a bare 400
+  and a `string` binds "1,2" (verified against a TestHost app on .NET 10); that join is an
+  accident of `StringValues.ToString()`, not behavior worth matching. Multi-valued headers keep
+  the comma-join deliberately: HTTP defines a repeated field as one comma-separated field, so the
+  join is the header's value.
+
 ### Fixed
 
 - A routed `ApiEndpointWithoutRequest<TResponse>` endpoint made the generator emit a registration
   that did not compile. The shape now has a first-class generated path through the new public
   `EndpointGroup.MapGeneratedUnbound`, producing the same endpoint as the reflective mapper.
+- A host that never called `AddNativeEndpoints()` now fails at `MapEndpointGroup` time with the
+  remedy in the message, instead of surfacing on the first binding failure or handler exception at
+  runtime — where the unresolvable `IEndpointProblemWriter` turned the caller's real 400 into an
+  opaque 500. Only the unkeyed registration is checked; the keyed variant remains optional
+  per-group customization.
+- A handler (or the serializer mid-write) that throws after the response has started streaming no
+  longer triggers a secondary `InvalidOperationException` from the problem writer setting the
+  status on a started response. The pipeline logs the original exception and aborts the connection
+  — the same choice ASP.NET Core's exception middleware makes when it cannot re-execute — so the
+  truncated response is not mistaken for a complete one. Fault renderers and exception translators
+  are consulted only while the response has not started, since they write responses.
+- `MapEndpointGroup` is marked `NoInlining` so the default group name, taken from
+  `Assembly.GetCallingAssembly()`, cannot misreport the caller under JIT inlining.
 
 ## 1.0.0-preview.1
 

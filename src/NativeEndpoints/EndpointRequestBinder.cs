@@ -492,7 +492,12 @@ public static class EndpointRequestBinder
     {
         if (query.TryGetValue(name, out var entry))
         {
-            value = entry.ToString();
+            // A repeated key bound to a scalar takes the first value. StringValues.ToString()
+            // comma-joins ("?page=1&page=2" becomes "1,2"), which no scalar sensibly means: it
+            // fails to parse, and under the lenient default that silently bound the type's zero.
+            // (Minimal APIs comma-join here too and therefore answer a bare 400 for typed scalars;
+            // that join is not behavior worth matching.) Headers stay joined — see BindDeclared.
+            value = entry.Count > 1 ? entry[0] : entry.ToString();
             return true;
         }
 
@@ -569,6 +574,10 @@ public static class EndpointRequestBinder
             case EndpointBindingSource.Header:
                 if (!context.Request.Headers.TryGetValue(key, out var header))
                     return AbsentValue(targetType, memberName, strict);
+                // Unlike a repeated query key, a multi-valued header deliberately keeps the
+                // comma-join of StringValues.ToString(): HTTP defines a repeated field as
+                // equivalent to one comma-separated field (RFC 9110 §5.3), so the join IS the
+                // header's value.
                 return ElementType(targetType) is not null
                     ? BuildCollection(targetType, header!, memberName, valueBinders, strict)
                     : Convert(header.ToString(), targetType, memberName, valueBinders, strict);

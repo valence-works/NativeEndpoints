@@ -209,6 +209,14 @@ public sealed class EndpointGroup
                 // A body that cannot be read (an I/O fault, an unreadable stream) is an infrastructure
                 // failure, and its details must not leak into the response.
                 LogUnexpected(context, exception, typeof(TMessage));
+                if (context.Response.HasStarted)
+                {
+                    // Binding does not write, so this is only reachable through middleware or a
+                    // custom binder that did; the same rule as HandleFailureAsync applies.
+                    context.Abort();
+                    return;
+                }
+
                 await WriteProblemAsync(context,
                     EndpointProblem.General(StatusCodes.Status500InternalServerError, "Unexpected error occurred"));
                 return;
@@ -494,6 +502,20 @@ public sealed class EndpointGroup
     /// </summary>
     private async Task HandleFailureAsync(HttpContext context, Exception exception, Type messageType)
     {
+        // A dispatch (or the serializer mid-write) that throws after the response started streaming
+        // cannot be answered with a problem document: setting the status or writing a body would
+        // throw an InvalidOperationException that replaces the real failure. Fault renderers and
+        // exception translators write responses, so they are not consulted either. Log the original
+        // exception and abort the connection so the truncated response is not mistaken for a
+        // complete one — the same choice ASP.NET Core's own exception middleware makes when it
+        // cannot re-execute the request.
+        if (context.Response.HasStarted)
+        {
+            LogUnexpected(context, exception, messageType);
+            context.Abort();
+            return;
+        }
+
         foreach (var renderer in FaultRenderers(context))
         {
             if (await renderer.TryWriteAsync(context, exception))

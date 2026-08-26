@@ -41,6 +41,11 @@ public class BinderConformanceTests : IAsyncDisposable
         "/probe/abc?page=notanumber&slug=a&price=1",
         "/probe/abc?page=1&page=notanumber&slug=a&price=1",
 
+        // A repeated key bound to a scalar takes the first value, in both binders alike: slug is a
+        // scalar IParsable and price goes through a registered parser.
+        "/probe/abc?slug=FIRST&slug=second&price=1",
+        "/probe/abc?slug=a&price=12.50&price=99",
+
         // Strict parsing: the path where a generated binder could most easily disagree with the
         // reflective one, since each decides independently what an unreadable value means.
         "/strict?page=7",
@@ -50,6 +55,11 @@ public class BinderConformanceTests : IAsyncDisposable
         "/strict?page=",
         "/strict?page=7&filter=",
         "/strict",
+
+        // A repeated key on a strict scalar parses the first value; an unreadable first value is
+        // rejected naming it, never the comma-join.
+        "/strict?page=1&page=2",
+        "/strict?page=notanumber&page=2",
 
         // Strict parsing over a registered value binder and collection elements, and the same
         // requests through the lenient contract, so both the failure and the fallback are compared.

@@ -50,6 +50,13 @@ two cases are distinguishable rather than both looking like "no value".
 that commas separate is the kind of implicit behavior that makes a binder unpredictable. A collection
 with no values present binds empty rather than null, so a handler can enumerate without a null check.
 
+**Repeated keys on a scalar.** A repeated query key bound to a scalar takes the first value:
+`?page=1&page=2` binds `1`. Comma-joining the values into "1,2" — which is what minimal APIs do —
+produces something no scalar sensibly means: it fails to parse, and a lenient fallback would then
+silently bind zero. Multi-valued headers are different: HTTP defines a repeated header field as
+equivalent to one comma-separated field, so a scalar bound with `[FromHeader]` from a repeated
+header receives the comma-joined value.
+
 **`IParsable<T>`.** Any type implementing it binds with no registration:
 
 ```csharp

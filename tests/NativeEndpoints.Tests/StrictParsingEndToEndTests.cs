@@ -49,6 +49,14 @@ public class StrictParsingEndToEndTests : IAsyncDisposable
 
         // The same unreadable values through the lenient contract fall back to defaults.
         { "/lenient-items?price=notmoney&ids=1&ids=notanumber", 200, new[] { "\"price\":0", "\"ids\":[1,0]" } },
+
+        // A repeated key bound to a scalar takes the first value instead of the comma-join, so a
+        // strict endpoint parses it rather than rejecting "1,2", and a lenient one binds it rather
+        // than silently defaulting. (Minimal APIs comma-join and answer a bare 400 here; that join
+        // is an accident of StringValues.ToString(), not behavior worth matching.)
+        { "/strict?page=1&page=2", 200, new[] { "\"page\":1" } },
+        { "/strict?page=notanumber&page=2", 400, new[] { "\"page\"", "Value [notanumber] is not valid for a [Int32] property!" } },
+        { "/lenient-items?price=12.50&price=99&ids=1", 200, new[] { "\"price\":12.50", "\"ids\":[1]" } },
     };
 
     [Theory]

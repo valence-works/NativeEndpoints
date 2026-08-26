@@ -32,14 +32,27 @@ public static class EndpointValue
         context.Request.RouteValues.TryGetValue(name, out var value) ? value?.ToString() : null;
 
     /// <summary>Reads the first value for a query key, or null when the key is absent.</summary>
+    /// <remarks>
+    /// First, not joined: <c>StringValues.ToString()</c> comma-joins a repeated key, and no scalar
+    /// sensibly means "1,2" — it fails to parse and, leniently, silently bound the type's zero.
+    /// Headers keep the join (see <see cref="Header"/>); query strings have no such semantics.
+    /// </remarks>
     public static string? Query(HttpContext context, string name) =>
-        context.Request.Query.TryGetValue(name, out var value) ? value.ToString() : null;
+        context.Request.Query.TryGetValue(name, out var value)
+            ? value.Count > 1 ? value[0] : value.ToString()
+            : null;
 
     /// <summary>Every value for a query key, in order.</summary>
     public static string?[] QueryValues(HttpContext context, string name) =>
         context.Request.Query.TryGetValue(name, out var value) ? [.. value] : [];
 
     /// <summary>Reads a request header, or null when it is absent.</summary>
+    /// <remarks>
+    /// A multi-valued header deliberately keeps the comma-join of <c>StringValues.ToString()</c>:
+    /// HTTP defines a repeated field as equivalent to one comma-separated field (RFC 9110 §5.3),
+    /// so the join IS the header's value. Repeated query keys bind differently — see
+    /// <see cref="Query"/>.
+    /// </remarks>
     public static string? Header(HttpContext context, string name) =>
         context.Request.Headers.TryGetValue(name, out var value) ? value.ToString() : null;
 
