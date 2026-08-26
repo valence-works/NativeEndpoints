@@ -43,7 +43,8 @@ public sealed class EndpointGroup
         JsonSerializerOptions jsonOptions,
         string jsonContentType,
         EndpointOperationConvention convention,
-        EndpointValueBinders valueBinders)
+        EndpointValueBinders valueBinders,
+        string? tag = null)
     {
         _endpoints = endpoints;
         Name = name;
@@ -52,10 +53,14 @@ public sealed class EndpointGroup
         _jsonContentType = jsonContentType;
         _convention = convention;
         _valueBinders = valueBinders;
+        Tag = tag ?? name;
     }
 
     /// <summary>The name applied to every endpoint in the group.</summary>
     public string Name { get; }
+
+    /// <summary>The tag the group's operations are published under. Defaults to <see cref="Name"/>.</summary>
+    public string Tag { get; }
 
     /// <summary>
     /// Maps a route onto an inline handler, for an operation with no endpoint class of its own.
@@ -282,22 +287,12 @@ public sealed class EndpointGroup
         // leaving the JSON default in place would reject every form request with a bare 415 before
         // the binder's own rules ever ran.
         var effectiveAccepts = descriptor.Accepts ?? DefaultAccepts(descriptor.BodyKind, effectiveBodyMode);
-        _convention(builder, new EndpointOperationContext
-        {
-            GroupName = Name,
-            Operation = descriptor.Operation,
-            Method = descriptor.Method,
-            Pattern = descriptor.Pattern,
-            RequestType = declaresRequest ? typeof(TMessage) : null,
-            ContractType = typeof(TMessage),
-            ReadsBody = effectiveBodyMode is not EndpointBodyMode.None,
-            BodyKind = descriptor.BodyKind,
-            ResponseType = descriptor.ResponseType,
-            Accepts = effectiveAccepts,
-            SuccessStatus = descriptor.SuccessStatus,
-            DocumentedStatus = descriptor.DocumentedStatus ?? descriptor.SuccessStatus,
-            DocumentAuthResponses = descriptor.DocumentAuthResponses
-        });
+        _convention(builder, Contextualize(
+            descriptor,
+            requestType: declaresRequest ? typeof(TMessage) : null,
+            contractType: typeof(TMessage),
+            readsBody: effectiveBodyMode is not EndpointBodyMode.None,
+            accepts: effectiveAccepts));
         return builder;
     }
 
@@ -488,15 +483,18 @@ public sealed class EndpointGroup
             Method = options.Method!,
             Pattern = options.Route!,
             Operation = options.Operation!,
+            Name = options.Name,
             BodyMode = options.BodyMode,
             Accepts = options.Accepts,
             ResponseType = responseType,
+            SuccessContentType = options.SuccessContentType,
             SuccessStatus = options.SuccessStatus,
             DocumentedStatus = options.DocumentedStatus,
             DocumentAuthResponses = options.DocumentAuthResponses,
             StrictTypedParsing = options.StrictTypedParsing,
             BodyKind = options.BodyKind,
-            RequireAntiforgery = options.RequireAntiforgery
+            RequireAntiforgery = options.RequireAntiforgery,
+            ContainFailures = options.ContainFailures
         };
 
     /// <summary>
@@ -593,43 +591,82 @@ public sealed class EndpointGroup
     }
 
     /// <summary>
-    /// The no-contract pipeline: nothing binds, so only the route, response, and success status of
-    /// the descriptor apply. The documented status is always the runtime one — an operation without
-    /// a request contract has no result-carried status to diverge from.
+    /// The no-contract pipeline: nothing binds, so the descriptor's request-side settings do not
+    /// apply. Everything describing the operation still does — an unbound endpoint documents its
+    /// status, its content type, and its authorization responses like any other.
     /// </summary>
+    /// <remarks>
+    /// This previously documented the runtime status unconditionally, reasoning that an operation
+    /// without a request contract has no result-carried status to diverge from. That conflated two
+    /// separate things: <see cref="ApiEndpointWithResult{TRequest,TResponse}"/> carries a status in
+    /// its result, whereas <see cref="EndpointOperationDescriptor.DocumentedStatus"/> is an explicit
+    /// declaration by the author, which an unbound operation is as entitled to make as a bound one.
+    /// <see cref="EndpointOperationDescriptor.DocumentAuthResponses"/> was dropped here too, with no
+    /// stated reason, which made its documented "forces the pair on or off" contract unreachable on
+    /// this path.
+    /// </remarks>
     private IEndpointConventionBuilder MapUnbound(
         EndpointOperationDescriptor descriptor,
         Func<HttpContext, Task> dispatch)
     {
-        RequestDelegate handler = async context =>
-        {
-            try
+        // An owner whose published contract makes the host's exception pipeline responsible for
+        // unexpected failures opts out of containment and runs bare.
+        RequestDelegate handler = descriptor.ContainFailures
+            ? async context =>
             {
-                await dispatch(context);
+                try
+                {
+                    await dispatch(context);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    await HandleFailureAsync(context, exception, typeof(EndpointGroup));
+                }
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                await HandleFailureAsync(context, exception, typeof(EndpointGroup));
-            }
-        };
+            : dispatch.Invoke;
 
         var builder = _endpoints.MapMethods(descriptor.Pattern, [descriptor.Method], handler);
-        _convention(builder, new EndpointOperationContext
-        {
-            GroupName = Name,
-            Operation = descriptor.Operation,
-            Method = descriptor.Method,
-            Pattern = descriptor.Pattern,
-            ResponseType = descriptor.ResponseType,
-            SuccessStatus = descriptor.SuccessStatus,
-            DocumentedStatus = descriptor.SuccessStatus
-        });
+        _convention(builder, Contextualize(descriptor));
         return builder;
     }
+
+    /// <summary>
+    /// The single translation from a descriptor to the context the convention sees. Every mapping
+    /// path builds its context here, for the same reason every path builds its descriptor in
+    /// <see cref="Describe"/>: a field added to either can no longer be dropped by one path and
+    /// forwarded by another. That is exactly how <see cref="EndpointOperationDescriptor.DocumentedStatus"/>
+    /// and <see cref="EndpointOperationDescriptor.DocumentAuthResponses"/> went missing on the
+    /// unbound path while the bound one forwarded them.
+    /// </summary>
+    private EndpointOperationContext Contextualize(
+        EndpointOperationDescriptor descriptor,
+        Type? requestType = null,
+        Type? contractType = null,
+        bool readsBody = false,
+        string[]? accepts = null) =>
+        new()
+        {
+            GroupName = Name,
+            Tag = Tag,
+            Operation = descriptor.Operation,
+            Name = descriptor.Name,
+            Method = descriptor.Method,
+            Pattern = descriptor.Pattern,
+            RequestType = requestType,
+            ContractType = contractType,
+            ReadsBody = readsBody,
+            BodyKind = descriptor.BodyKind,
+            ResponseType = descriptor.ResponseType,
+            SuccessContentType = descriptor.SuccessContentType,
+            Accepts = accepts ?? descriptor.Accepts,
+            SuccessStatus = descriptor.SuccessStatus,
+            DocumentedStatus = descriptor.DocumentedStatus ?? descriptor.SuccessStatus,
+            DocumentAuthResponses = descriptor.DocumentAuthResponses
+        };
 
     private Task WriteProblemAsync(HttpContext context, EndpointProblem problem)
     {

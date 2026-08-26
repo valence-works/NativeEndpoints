@@ -10,11 +10,33 @@ namespace NativeEndpoints;
 /// </remarks>
 public sealed record EndpointOperationContext
 {
+    private readonly string? _tag;
+
     /// <summary>The name of the group the endpoint was mapped in.</summary>
     public required string GroupName { get; init; }
 
+    /// <summary>
+    /// The tag the group publishes under. Defaults to <see cref="GroupName"/>.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the group name because the two answer different questions: the name keeps
+    /// endpoint identifiers unique across a host, while the tag is how a document groups operations
+    /// for a reader. Several groups can legitimately share one tag while keeping distinct names.
+    /// </remarks>
+    public string Tag
+    {
+        get => _tag ?? GroupName;
+        init => _tag = value;
+    }
+
     /// <summary>The stable operation identifier, declared or derived.</summary>
     public required string Operation { get; init; }
+
+    /// <summary>
+    /// The literal endpoint name the operation declared, when it could not be derived from
+    /// <see cref="Operation"/>. Null means the convention derives the name.
+    /// </summary>
+    public string? Name { get; init; }
 
     /// <summary>The HTTP method the route was mapped for.</summary>
     public required string Method { get; init; }
@@ -42,6 +64,11 @@ public sealed record EndpointOperationContext
 
     /// <summary>The success response body type. Null means no body.</summary>
     public Type? ResponseType { get; init; }
+
+    /// <summary>
+    /// The content type the success response is documented as. Null documents JSON.
+    /// </summary>
+    public string? SuccessContentType { get; init; }
 
     /// <summary>Content types the request body is accepted as.</summary>
     public string[]? Accepts { get; init; }

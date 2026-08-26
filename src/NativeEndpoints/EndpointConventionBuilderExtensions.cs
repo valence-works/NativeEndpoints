@@ -53,13 +53,13 @@ public static class EndpointConventionBuilderExtensions
 
         var hasBody = context.ResponseType is not null && context.ResponseType != typeof(void);
         builder
-            .WithName($"{context.GroupName}_{context.Operation}")
-            .WithTags(context.GroupName)
+            .WithName(context.Name ?? $"{context.GroupName}_{context.Operation}")
+            .WithTags(context.Tag)
             .WithEndpointGroup(context.GroupName)
             .AddEndpointMetadata(new ProducesResponseTypeMetadata(
                 context.DocumentedStatus,
                 context.ResponseType ?? typeof(void),
-                hasBody ? [JsonContentType] : []));
+                hasBody ? [context.SuccessContentType ?? JsonContentType] : []));
 
         if (context.RequestType is not null)
             builder.AddEndpointMetadata(new AcceptsMetadata(context.Accepts ?? [JsonContentType], context.RequestType, false));

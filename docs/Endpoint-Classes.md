@@ -73,12 +73,44 @@ public override void Configure(ApiEndpointOptions options)
 |---|---|
 | `Method`, `Route` | Set by the route attribute; override to compute a route |
 | `Operation` | Pins the operation identifier, overriding derivation |
+| `Name` | Pins the endpoint name itself, for an identifier frozen in an already-published document |
 | `Accepts` | Content types the request is accepted as; also decides whether a request schema is documented |
 | `BodyMode` | How the request body is treated. See [[Binding]] |
 | `SuccessStatus` | The status written at runtime on success |
 | `DocumentedStatus` | The status the document declares, when it deliberately differs from the runtime one |
+| `SuccessContentType` | The content type the success response is documented as. Defaults to JSON |
 | `DocumentAuthResponses` | Forces the documented 401/403 pair on or off |
+| `ContainFailures` | Whether the group answers an unhandled exception, or the host pipeline does |
 | `Convention(...)` | Registers an ordinary ASP.NET Core convention |
+
+### Name versus operation
+
+`Operation` is the identifier; the name is what the document publishes, and by default it is
+`{group}_{operation}`. Setting `Name` replaces that outright. It exists for one situation: an
+operation identifier that was published before the naming scheme and that clients already generate
+from. Reach for `Operation` first — a derived name keeps the convention intact, and a hand-written
+one has to stay unique across the host by hand.
+
+```csharp
+options.Operation = "LoginPage";
+options.Name = "AspNetCoreIdentityLoginPage";   // frozen; predates the scheme
+```
+
+### Owning the whole response
+
+An [`ApiEndpoint`](#writing-the-response-yourself) writes its own response, so it declares what that
+response is rather than having it inferred:
+
+```csharp
+options.SuccessContentType = "text/event-stream";
+options.ContainFailures = false;   // let the host's exception pipeline answer faults
+```
+
+`ContainFailures` defaults to true, which is what you want unless the owner's published contract
+makes the host responsible for unexpected failures — a host already running its own exception
+middleware, or one serving a UI whose error page is not a problem document. It is honoured only by
+the response-owning shape; a bound endpoint always contains, because its failure translation is what
+produces the documented status.
 
 > **`Configure` runs on an uninitialized instance.** It is invoked once at map time, before any
 > constructor runs, so constructor-injected fields are null inside it. Read only the `options`

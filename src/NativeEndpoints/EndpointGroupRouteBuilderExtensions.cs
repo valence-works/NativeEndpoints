@@ -29,6 +29,12 @@ public static class EndpointGroupRouteBuilderExtensions
     /// The exact Content-Type written on success responses. The charset suffix is part of a
     /// published wire contract, so it is configurable rather than assumed.
     /// </param>
+    /// <param name="tag">
+    /// The OpenAPI tag the group's operations are published under. Defaults to <paramref name="name"/>.
+    /// Separate from the name because the two answer different questions: the name keeps endpoint
+    /// identifiers unique across a host, while the tag is how a document groups operations for a
+    /// reader, and several groups can legitimately share one tag while keeping distinct names.
+    /// </param>
     [UnconditionalSuppressMessage("Trimming", "IL2026",
         Justification = "JsonSerializerOptions.Web is only used when no JsonSerializerContext was supplied. A trimmed or AOT host supplies one.")]
     [UnconditionalSuppressMessage("AOT", "IL3050",
@@ -41,7 +47,8 @@ public static class EndpointGroupRouteBuilderExtensions
         this IEndpointRouteBuilder endpoints,
         string? name = null,
         JsonSerializerContext? jsonContext = null,
-        string jsonContentType = "application/json; charset=utf-8")
+        string jsonContentType = "application/json; charset=utf-8",
+        string? tag = null)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentException.ThrowIfNullOrWhiteSpace(jsonContentType);
@@ -80,6 +87,6 @@ public static class EndpointGroupRouteBuilderExtensions
         var convention = options?.OperationConvention ?? EndpointConventionBuilderExtensions.ApplyDefaultOperationMetadata;
         var valueBinders = options?.ValueBinders ?? new EndpointValueBinders();
 
-        return new(endpoints, groupName, jsonContext, jsonOptions, jsonContentType, convention, valueBinders);
+        return new(endpoints, groupName, jsonContext, jsonOptions, jsonContentType, convention, valueBinders, tag);
     }
 }
