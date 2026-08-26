@@ -31,7 +31,10 @@ public class DescriptorForwardingTests
     {
         ["BodyMode"] = "Binding input. Reaches the convention as the derived ReadsBody instead.",
         ["StrictTypedParsing"] = "Binding behaviour. Nothing about the document depends on it.",
-        ["ContainFailures"] = "Runtime failure routing. Nothing about the document depends on it."
+        ["ContainFailures"] = "Runtime failure routing. Nothing about the document depends on it.",
+        ["RequireAntiforgery"] =
+            "Applied by MapOperation itself, as the framework's own RequireAntiforgeryTokenAttribute, " +
+            "before the convention runs. A host convention neither needs it nor could improve on it."
     };
 
     [Fact]
