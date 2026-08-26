@@ -13,10 +13,12 @@ namespace NativeEndpoints;
 /// contracts already do, and turning it on can change an existing API's responses.
 /// </param>
 /// <param name="ValueBinders">Parsers for types the binder does not know natively.</param>
+/// <param name="BodyKind">What the request body is read as. Orthogonal to <paramref name="BodyMode"/>.</param>
 public sealed record EndpointBindingOptions(
     EndpointBodyMode BodyMode,
     bool StrictTypedParsing = false,
-    EndpointValueBinders? ValueBinders = null);
+    EndpointValueBinders? ValueBinders = null,
+    EndpointBodyKind BodyKind = EndpointBodyKind.Json);
 
 /// <summary>The outcome of reading a request body.</summary>
 /// <param name="Succeeded">False when <paramref name="Failure"/> describes why the body was rejected.</param>

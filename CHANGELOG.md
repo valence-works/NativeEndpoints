@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.0.0-preview.4
+
+Forms, in the shape the binder already had.
+
+**Form bodies.** `options.BodyKind = EndpointBodyKind.Form` binds a contract from a
+`multipart/form-data` or `application/x-www-form-urlencoded` body. A form is not a fifth binding
+source: it *is* the body, so it occupies the body's place in the existing route → body → query
+order, and an unattributed member on a form endpoint binds from a field without ceremony.
+`[FromForm]` overrides that for one member, exactly as `[FromQuery]` does — for a renamed field, or
+one a route value would otherwise shadow.
+
+The form path needs no equivalent of the supplied-property set. JSON needs the payload read twice to
+tell an explicit null from an omitted property; a form collection answers presence directly, and has
+no null to distinguish. An empty field is the empty string, exactly as in the query string, so the
+lenient and strict rules carry over unchanged — including preview.3's repeated-scalar rule, where a
+repeated key reads its first value rather than the comma-join.
+
+**File upload.** `IFormFile`, `IFormFile[]`, `List<IFormFile>`, and `IFormFileCollection` members
+bind, on the generated path as well as the reflective one. A file takes none of the precedence chain
+— it is not parsed from a string — and an absent file binds null rather than failing, so a
+non-nullable member can still be null at runtime. Reading a form buffers it, so streaming multipart
+stays out of scope. `samples/Aot` now carries a file-bearing form endpoint, so CI's native-AOT
+publish proves the generated file path stays reflection-free.
+
+**Form endpoints must declare an antiforgery stance.** `options.RequireAntiforgery` has no default,
+and mapping a form endpoint without one throws at startup naming the operation. A form is the one
+request shape a browser can be induced to send cross-origin with the user's cookies attached, so
+defaulting either way is wrong for somebody. The stance is published as ASP.NET Core's own
+`IAntiforgeryMetadata`, which means the host still has to run `UseAntiforgery()` for it to do
+anything — stated in the docs rather than pretended otherwise.
+
+`Accepts` follows the kind, defaulting a form endpoint to the two form media types. That default is
+load-bearing: `AcceptsMatcherPolicy` reads it during routing, so a JSON default left in place would
+reject every form request with a bare 415 before the binder ran.
+
+**NE0006.** A form field or file member on a `GET` or `HEAD` contract is reported at build time. The
+member binds perfectly well; there is simply never a body for it to bind from. Reported under the
+same conservatism as `NE0002` — bodyless methods only, because `Configure` can change the body kind
+in ways the generator reads only shallowly. There is deliberately no rule for a missing antiforgery
+stance: that is also set in `Configure`, so mapping throws instead, which covers the reflective path
+too.
+
+**OpenAPI.** Form fields are documented as a multipart request body rather than as parameters —
+OpenAPI has no `in: form`, and the parameter transformer's default arm would otherwise have
+published them as query parameters, which a generated client would put in the URL. `IFormFile`
+renders as `string`/`binary`, file collections as arrays of it, and the media types come from the
+endpoint's own `Accepts` rather than a constant.
+
+### Breaking
+
+- `EndpointBindingSource` gains `Form`. A consumer switching exhaustively over it gets a new case.
+- `EndpointParameterDescriber.Describe` takes an `EndpointBodyKind`, defaulted to `Json`.
+- `EndpointBindingOptions` gains `BodyKind`, `EndpointOperationDescriptor` gains `BodyKind` and
+  `RequireAntiforgery`, and `EndpointRequestBinder.ReadBodyAsync` an optional `bodyKind`. All are
+  defaulted, so existing calls compile unchanged.
+- `EndpointBindingFailure` gains `RequestTooLarge`, reported as 413.
+- Regenerate: binders emitted by preview.3 carry no form branch.
+
 ## 1.0.0-preview.3
 
 A correctness release, driven by a full review of preview.2 rather than by new features.

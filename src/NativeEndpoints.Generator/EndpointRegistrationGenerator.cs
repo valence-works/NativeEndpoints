@@ -197,6 +197,12 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
     /// <summary>Whether the emitter can write a conversion for this parameter.</summary>
     private static bool IsEmittable(ContractParameter parameter, ImmutableArray<string> routeKeys)
     {
+        // A file needs no conversion at all. This arm is load-bearing rather than an optimisation:
+        // without it a file-bearing endpoint falls back to the reflective mapper, which is annotated
+        // RequiresUnreferencedCode, and samples/Aot fails to publish rather than degrading.
+        if (parameter.FormFile is not FormFileKind.None)
+            return true;
+
         // Collections need an element conversion; scalars need their own.
         if (parameter.IsArray || parameter.IsList)
             return !string.IsNullOrEmpty(parameter.ElementConverter);
@@ -274,6 +280,7 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             "NativeEndpoints.FromQueryAttribute" => "Query",
             "NativeEndpoints.FromHeaderAttribute" => "Header",
             "NativeEndpoints.FromClaimAttribute" => "Claim",
+            "NativeEndpoints.FromFormAttribute" => "Form",
             _ => null
         };
 
@@ -296,7 +303,8 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
             source,
             key,
             parameter.Type is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated },
-            parameter.HasExplicitDefaultValue);
+            parameter.HasExplicitDefaultValue,
+            EndpointSymbols.FormFile(parameter.Type));
     }
 
     private static bool IsBindFrom(INamedTypeSymbol? attributeClass)
@@ -345,7 +353,20 @@ public sealed class EndpointRegistrationGenerator : IIncrementalGenerator
                 Diagnostics.UnsupportedParameterType, Location.None,
                 model.ContractName, parameter.Name, parameter.TypeName));
         }
+
+        // A form field or a file on a bodyless method. Unlike NE0002 this needs no bindability
+        // check: the member binds perfectly well, there is simply never anything to bind it from.
+        foreach (var parameter in model.Contract.Where(IsFormBound))
+        {
+            production.ReportDiagnostic(Diagnostic.Create(
+                Diagnostics.FormMemberWithoutBody, Location.None,
+                model.ContractName, parameter.Name, model.DisplayName, model.HttpMethod));
+        }
     }
+
+    /// <summary>Whether a member can only ever come from a form.</summary>
+    private static bool IsFormBound(ContractParameter parameter) =>
+        parameter.FormFile is not FormFileKind.None || parameter.DeclaredSource == "Form";
 
     private static Microsoft.CodeAnalysis.Text.SourceText SourceText(string assemblyName, ImmutableArray<EndpointModel> endpoints)
     {

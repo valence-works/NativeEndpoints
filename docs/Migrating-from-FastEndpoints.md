@@ -81,8 +81,11 @@ And the operation identifier comes from the namespace, so it is not written down
 
 ## Things that will bite
 
-**Binding is narrower.** Route, body, and query only, over seven scalar types. Headers, claims, query
-collections, and forms have no equivalent yet. Check your contracts before committing to the move.
+**Binding is narrower.** Route, body, query, header, claim, and form, over seven scalar types plus
+anything implementing `IParsable<T>` or given a registered parser. Headers and claims bind only
+through `[FromHeader]` and `[FromClaim]`, never implicitly. Forms and `IFormFile` members bind, but
+reading a form buffers it, so a streaming upload has no equivalent. Check your contracts before
+committing to the move.
 
 **No validation.** FastEndpoints wires FluentValidation for you. Here, validate in the handler or
 register FluentValidation yourself and call it.

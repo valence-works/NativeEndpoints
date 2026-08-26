@@ -68,7 +68,7 @@ public static class EndpointConventionBuilderExtensions
         // state them explicitly from the contract's shape. Plain metadata: whoever generates the
         // document decides what to do with it.
         foreach (var parameter in EndpointParameterDescriber.Describe(
-                     context.ContractType, context.Pattern, context.ReadsBody))
+                     context.ContractType, context.Pattern, context.ReadsBody, context.BodyKind))
         {
             builder.AddEndpointMetadata(parameter);
         }

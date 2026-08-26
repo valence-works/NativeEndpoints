@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- Referencing NativeEndpoints.OpenApi brings its XML-comment source generator, which emits
+         interceptors and needs its namespace opted in. -->
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);Microsoft.AspNetCore.OpenApi.Generated</InterceptorsNamespaces>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

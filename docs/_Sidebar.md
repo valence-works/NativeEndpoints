@@ -4,6 +4,7 @@
 - [[Getting-Started]]
 - [[Endpoint-Classes]]
 - [[Binding]]
+- [[Forms]]
 - [[Source-Generator]]
 - [[Problem-Details]]
 - [[Unload-Safety]]

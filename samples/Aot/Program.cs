@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Aot.Endpoints.Widgets.Get;
+using Aot.Endpoints.Widgets.Import;
 using NativeEndpoints;
 using NativeEndpoints.Generated;
 
@@ -19,4 +20,6 @@ app.Run();
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(GetWidget))]
 [JsonSerializable(typeof(WidgetView))]
+[JsonSerializable(typeof(ImportWidgets))]
+[JsonSerializable(typeof(ImportView))]
 internal partial class AotJson : JsonSerializerContext;

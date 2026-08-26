@@ -28,6 +28,7 @@ public sealed class Endpoint(IInvoiceStore store) : ApiEndpoint<GetInvoice, Invo
 - **[[Getting-Started]]** — install, wire up, write the first endpoint.
 - **[[Endpoint-Classes]]** — the five base types, `Configure`, and conventions.
 - **[[Binding]]** — precedence, supported types, body modes, and failures.
+- **[[Forms]]** — multipart and URL-encoded bodies, file upload, and the antiforgery stance.
 - **[[Source-Generator]]** — generated registration and the build-time diagnostics.
 - **[[Problem-Details]]** — turning exceptions into responses.
 - **[[Unload-Safety]]** — what it means, how it is enforced, how to verify it.

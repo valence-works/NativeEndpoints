@@ -86,6 +86,111 @@ public class GeneratorDiagnosticTests
         Assert.Empty(compileErrors);
     }
 
+    [Fact]
+    public void A_file_member_on_a_bodyless_method_reports_NE0006()
+    {
+        var (diagnostics, _, _) = Run("""
+            namespace Forms;
+
+            public sealed record Request(Microsoft.AspNetCore.Http.IFormFile Upload);
+
+            [NativeEndpoints.Get("things")]
+            public sealed class Endpoint : NativeEndpoints.ApiEndpoint<Request>
+            {
+                public override System.Threading.Tasks.Task HandleAsync(Request request, System.Threading.CancellationToken token) =>
+                    System.Threading.Tasks.Task.CompletedTask;
+            }
+            """);
+
+        var diagnostic = Assert.Single(diagnostics, item => item.Id == "NE0006");
+        Assert.Contains("A form is a request body", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.Contains("GET", diagnostic.GetMessage(), StringComparison.Ordinal);
+
+        // A file binds; it simply has nowhere to bind from here. Reporting NE0002 as well would send
+        // the reader looking for an IParsable<IFormFile>.
+        Assert.DoesNotContain(diagnostics, item => item.Id == "NE0002");
+    }
+
+    [Fact]
+    public void A_FromForm_member_on_a_bodyless_method_reports_NE0006()
+    {
+        var (diagnostics, _, _) = Run("""
+            namespace Forms;
+
+            public sealed record Request([property: NativeEndpoints.FromForm] string Name);
+
+            [NativeEndpoints.Get("things")]
+            public sealed class Endpoint : NativeEndpoints.ApiEndpoint<Request>
+            {
+                public override System.Threading.Tasks.Task HandleAsync(Request request, System.Threading.CancellationToken token) =>
+                    System.Threading.Tasks.Task.CompletedTask;
+            }
+            """);
+
+        var diagnostic = Assert.Single(diagnostics, item => item.Id == "NE0006");
+        Assert.Contains("binds member 'Name' from a form", diagnostic.GetMessage(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Every_file_shape_reports_NE0006_on_a_bodyless_method()
+    {
+        var (diagnostics, _, _) = Run("""
+            namespace Forms;
+
+            public sealed record Request(
+                Microsoft.AspNetCore.Http.IFormFile One,
+                Microsoft.AspNetCore.Http.IFormFile[] Many,
+                System.Collections.Generic.List<Microsoft.AspNetCore.Http.IFormFile> Listed,
+                Microsoft.AspNetCore.Http.IFormFileCollection All);
+
+            [NativeEndpoints.Get("things")]
+            public sealed class Endpoint : NativeEndpoints.ApiEndpoint<Request>
+            {
+                public override System.Threading.Tasks.Task HandleAsync(Request request, System.Threading.CancellationToken token) =>
+                    System.Threading.Tasks.Task.CompletedTask;
+            }
+            """);
+
+        Assert.Equal(4, diagnostics.Count(item => item.Id == "NE0006"));
+    }
+
+    [Fact]
+    public void A_form_endpoint_reports_nothing_and_its_registration_compiles()
+    {
+        // The rule is about a member that can never receive a value, not about form binding as such.
+        // A POST carries a body, and whether that body is a form is decided in Configure, which the
+        // generator reads only shallowly — so guessing there would be noise.
+        var (diagnostics, generated, compileErrors) = Run("""
+            namespace Forms;
+
+            public sealed record Request(
+                System.Guid Id,
+                string Name,
+                Microsoft.AspNetCore.Http.IFormFile? Upload,
+                Microsoft.AspNetCore.Http.IFormFile[] Attachments);
+
+            [NativeEndpoints.Post("things/{id}")]
+            public sealed class Endpoint : NativeEndpoints.ApiEndpoint<Request>
+            {
+                public override void Configure(NativeEndpoints.ApiEndpointOptions options)
+                {
+                    options.BodyKind = NativeEndpoints.EndpointBodyKind.Form;
+                    options.RequireAntiforgery = false;
+                }
+
+                public override System.Threading.Tasks.Task HandleAsync(Request request, System.Threading.CancellationToken token) =>
+                    System.Threading.Tasks.Task.CompletedTask;
+            }
+            """);
+
+        Assert.Empty(diagnostics);
+        Assert.Empty(compileErrors);
+
+        // Emitted, not fallen back to the reflective mapper — which is what keeps the AOT claim true.
+        Assert.Contains("EndpointValue.File(context, \"Upload\")", generated, StringComparison.Ordinal);
+        Assert.Contains("EndpointValue.Files(context, \"Attachments\")", generated, StringComparison.Ordinal);
+    }
+
     private static (ImmutableArray<Diagnostic> Diagnostics, string Generated, Diagnostic[] CompileErrors) Run(string source)
     {
         var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)

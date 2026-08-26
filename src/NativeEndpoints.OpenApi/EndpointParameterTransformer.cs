@@ -16,6 +16,13 @@ namespace NativeEndpoints.OpenApi;
 /// controls; it is a consequence of the credential they present, and documenting it as an input
 /// would invite clients to try to send it.
 /// </para>
+/// <para>
+/// Form fields are not written either, for a different reason: OpenAPI has no <c>in: form</c>. A form
+/// field belongs in the operation's request body, which
+/// <see cref="EndpointFormRequestBodyTransformer"/> writes. Leaving it to the default arm below would
+/// publish it as a query parameter — worse than omitting it, because a generated client would then
+/// send it in the URL.
+/// </para>
 /// </remarks>
 public sealed class EndpointParameterTransformer : IOpenApiOperationTransformer
 {
@@ -27,7 +34,7 @@ public sealed class EndpointParameterTransformer : IOpenApiOperationTransformer
 
         var described = context.Description.ActionDescriptor.EndpointMetadata
             .OfType<EndpointParameterMetadata>()
-            .Where(parameter => parameter.Source is not EndpointBindingSource.Claim)
+            .Where(parameter => parameter.Source is not (EndpointBindingSource.Claim or EndpointBindingSource.Form))
             .ToArray();
 
         if (described.Length == 0)
@@ -54,44 +61,10 @@ public sealed class EndpointParameterTransformer : IOpenApiOperationTransformer
                     _ => ParameterLocation.Query
                 },
                 Required = parameter.Required || parameter.Source is EndpointBindingSource.Route,
-                Schema = Describe(parameter.Type)
+                Schema = EndpointSchema.Describe(parameter.Type)
             });
         }
 
         return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// A deliberately small schema: enough for a generated client to produce the right call.
-    /// </summary>
-    private static OpenApiSchema Describe(Type type)
-    {
-        var underlying = Nullable.GetUnderlyingType(type) ?? type;
-
-        var element = underlying.IsArray
-            ? underlying.GetElementType()
-            : underlying.IsGenericType && underlying.GetGenericArguments().Length == 1 && underlying != typeof(string)
-                ? underlying.GetGenericArguments()[0]
-                : null;
-
-        if (element is not null && underlying != typeof(string))
-            return new OpenApiSchema { Type = JsonSchemaType.Array, Items = Describe(element) };
-
-        if (underlying == typeof(bool)) return new OpenApiSchema { Type = JsonSchemaType.Boolean };
-        if (underlying == typeof(int)) return new OpenApiSchema { Type = JsonSchemaType.Integer, Format = "int32" };
-        if (underlying == typeof(long)) return new OpenApiSchema { Type = JsonSchemaType.Integer, Format = "int64" };
-        if (underlying == typeof(Guid)) return new OpenApiSchema { Type = JsonSchemaType.String, Format = "uuid" };
-        if (underlying == typeof(DateTimeOffset) || underlying == typeof(DateTime))
-            return new OpenApiSchema { Type = JsonSchemaType.String, Format = "date-time" };
-        if (underlying.IsEnum)
-        {
-            return new OpenApiSchema
-            {
-                Type = JsonSchemaType.String,
-                Enum = [.. Enum.GetNames(underlying).Select(name => (System.Text.Json.Nodes.JsonNode)name)]
-            };
-        }
-
-        return new OpenApiSchema { Type = JsonSchemaType.String };
     }
 }

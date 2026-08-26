@@ -59,7 +59,29 @@ internal sealed record ContractParameter(
     string? DeclaredSource,
     string? DeclaredKey,
     bool SuppressNull,
-    bool HasDefaultValue);
+    bool HasDefaultValue,
+    FormFileKind FormFile);
+
+/// <summary>The file shape a contract member has, if any.</summary>
+/// <remarks>
+/// Carried explicitly rather than smuggled through <see cref="ContractParameter.Converter"/>, because
+/// a file is not converted from a string at all and every string-shaped path would have to special
+/// case it.
+/// </remarks>
+internal enum FormFileKind
+{
+    /// <summary>Not a file.</summary>
+    None,
+
+    /// <summary>IFormFile: the first file under the member's own name.</summary>
+    Single,
+
+    /// <summary>An array or list of IFormFile: every file under the member's own name.</summary>
+    Many,
+
+    /// <summary>IFormFileCollection: every file in the request, whatever name it arrived under.</summary>
+    All
+}
 
 /// <summary>Which base an endpoint derives from, and therefore how it is mapped.</summary>
 internal enum EndpointShape
@@ -196,6 +218,28 @@ internal static class EndpointSymbols
         "string", "bool", "int", "long", "System.Guid", "System.DateTimeOffset", "System.DateTime"
     };
 
+    private const string FormFileName = "Microsoft.AspNetCore.Http.IFormFile";
+    private const string FormFileCollectionName = "Microsoft.AspNetCore.Http.IFormFileCollection";
+
+    /// <summary>The declared name without a nullable-reference annotation, which "IFormFile?" carries.</summary>
+    private static string Unannotated(ITypeSymbol type) =>
+        type.WithNullableAnnotation(NullableAnnotation.NotAnnotated).ToDisplayString();
+
+    /// <summary>The file shape of a member, detected by name so the generator takes no new reference.</summary>
+    internal static FormFileKind FormFile(ITypeSymbol type)
+    {
+        switch (Unannotated(type))
+        {
+            case FormFileName: return FormFileKind.Single;
+            case FormFileCollectionName: return FormFileKind.All;
+        }
+
+        var (element, _, _) = Collection(type);
+        return element is not null && Unannotated(element) == FormFileName
+            ? FormFileKind.Many
+            : FormFileKind.None;
+    }
+
     /// <summary>The EndpointValue call that converts a raw string into this type.</summary>
     internal static string? Converter(ITypeSymbol type)
     {
@@ -284,6 +328,12 @@ internal static class EndpointSymbols
             return true;
 
         if (NativelyBindable.Contains(type.ToDisplayString()))
+            return true;
+
+        // Checked after the collection recursion above, which has already reduced IFormFile[] to its
+        // element, so this arm sees the single and collection shapes alike. A file binds; it simply
+        // does not bind from a string, which is why NE0002 must not fire for it.
+        if (Unannotated(type) is FormFileName or FormFileCollectionName)
             return true;
 
         // IParsable<TSelf> binds with no registration. A registered value binder also works, but the

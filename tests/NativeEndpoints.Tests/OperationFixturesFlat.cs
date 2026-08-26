@@ -204,3 +204,94 @@ public sealed class RawFailureEndpoint : NativeEndpoints.ApiEndpoint
             _ => (Exception)new InvalidOperationException("sensitive connection string detail")
         };
 }
+
+public sealed record UploadForm(
+    Guid Id,
+    string Title,
+    int Count,
+    string[] Tag,
+    string? Note,
+    [property: FromForm("legacy_name")] string? LegacyName);
+
+/// <summary>Echoed in full, so a divergence between the two binders shows up as different bytes.</summary>
+public sealed record UploadView(Guid Id, string Title, int Count, string[] Tag, string? Note, string? LegacyName);
+
+/// <summary>
+/// The route carries <c>{id}</c> while the form also sends an <c>id</c> field, so this pins that
+/// route precedence still wins over the body when the body is a form.
+/// </summary>
+[NativeEndpoints.Post("upload/{id}")]
+public sealed class UploadEndpoint : ApiEndpoint<UploadForm, UploadView>
+{
+    public override void Configure(ApiEndpointOptions options)
+    {
+        options.BodyKind = EndpointBodyKind.Form;
+
+        // The conformance host composes its pipeline by hand and so has no antiforgery middleware.
+        // Declaring the stance is mandatory for a form endpoint; this one opts out explicitly.
+        options.RequireAntiforgery = false;
+    }
+
+    public override Task<UploadView> HandleAsync(UploadForm request, CancellationToken cancellationToken) =>
+        Task.FromResult(new UploadView(
+            request.Id, request.Title, request.Count, request.Tag, request.Note, request.LegacyName));
+}
+
+/// <summary>Strict parsing over a form, where the two binders decide independently what a bad field means.</summary>
+public sealed record StrictForm(int Page, Guid? Filter, string? Term);
+
+[NativeEndpoints.Post("strict-form")]
+public sealed class StrictFormEndpoint : ApiEndpoint<StrictForm, StrictView>
+{
+    public override void Configure(ApiEndpointOptions options)
+    {
+        options.BodyKind = EndpointBodyKind.Form;
+        options.StrictTypedParsing = true;
+        options.RequireAntiforgery = false;
+    }
+
+    public override Task<StrictView> HandleAsync(StrictForm request, CancellationToken cancellationToken) =>
+        Task.FromResult(new StrictView(request.Page, request.Filter?.ToString(), request.Term));
+}
+
+/// <summary>
+/// Every file shape the binder supports, including a non-nullable one so the emitter's null
+/// suppression is exercised rather than assumed.
+/// </summary>
+public sealed record UploadFiles(
+    string Label,
+    IFormFile Required,
+    IFormFile? Avatar,
+    IFormFile[] Pages,
+    List<IFormFile> Docs,
+    IFormFileCollection Everything);
+
+/// <summary>Names and lengths rather than the files, so a divergence shows up as different bytes.</summary>
+public sealed record FileView(
+    string Label,
+    string RequiredName,
+    long RequiredLength,
+    string? AvatarName,
+    string[] PageNames,
+    string[] DocNames,
+    int TotalFiles);
+
+[NativeEndpoints.Post("files")]
+public sealed class UploadFilesEndpoint : ApiEndpoint<UploadFiles, FileView>
+{
+    public override void Configure(ApiEndpointOptions options)
+    {
+        options.BodyKind = EndpointBodyKind.Form;
+        options.RequireAntiforgery = false;
+    }
+
+    public override Task<FileView> HandleAsync(UploadFiles request, CancellationToken cancellationToken) =>
+        Task.FromResult(new FileView(
+            request.Label,
+            request.Required?.FileName ?? "<none>",
+            request.Required?.Length ?? -1,
+            request.Avatar?.FileName,
+            [.. request.Pages.Select(file => file.FileName)],
+            [.. request.Docs.Select(file => file.FileName)],
+            request.Everything.Count));
+}

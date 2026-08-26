@@ -26,6 +26,15 @@ public sealed record EndpointOperationDescriptor
     /// <summary>How the request body is treated. Null defaults by HTTP method.</summary>
     public EndpointBodyMode? BodyMode { get; init; }
 
+    /// <summary>What the request body is read as. Orthogonal to <see cref="BodyMode"/>.</summary>
+    public EndpointBodyKind BodyKind { get; init; } = EndpointBodyKind.Json;
+
+    /// <summary>
+    /// Whether the endpoint requires an antiforgery token. No default for a form body: one must be
+    /// declared, or mapping throws.
+    /// </summary>
+    public bool? RequireAntiforgery { get; init; }
+
     /// <summary>Content types the request is accepted as. Also decides whether a request schema is documented.</summary>
     public string[]? Accepts { get; init; }
 
