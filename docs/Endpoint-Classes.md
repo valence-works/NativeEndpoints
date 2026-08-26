@@ -109,13 +109,20 @@ options.ContainFailures = false;              // let the host's exception pipeli
 ```
 
 Owning the response is not the same as having nothing to say about it. All three describe what the
-handler writes rather than changing it, and all three default to saying nothing.
+handler writes rather than changing it — setting them moves the document, never the response.
 
-`ContainFailures` defaults to true, which is what you want unless the owner's published contract
-makes the host responsible for unexpected failures — a host already running its own exception
-middleware, or one serving a UI whose error page is not a problem document. It is honoured only by
-the response-owning shape; a bound endpoint always contains, because its failure translation is what
-produces the documented status.
+Their defaults are not uniform, so it is worth being exact:
+
+| Left unset | What you get |
+|---|---|
+| `ResponseType` | No response body is documented at all |
+| `SuccessContentType` | JSON — but only once a body has been declared; with no body, no content type |
+| `ContainFailures` | Containment **on**: the group answers unhandled exceptions |
+
+Containment is what you want unless the owner's published contract makes the host responsible for
+unexpected failures — a host already running its own exception middleware, or one serving a UI whose
+error page is not a problem document. It is honoured only by the response-owning shape; a bound
+endpoint always contains, because its failure translation is what produces the documented status.
 
 > **`Configure` runs on an uninitialized instance.** It is invoked once at map time, before any
 > constructor runs, so constructor-injected fields are null inside it. Read only the `options`

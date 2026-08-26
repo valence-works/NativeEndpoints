@@ -18,10 +18,11 @@ documents a body that is not JSON — a server-sent event stream, a rendered pag
 `options.ResponseType` documents the body's type, which `MapRaw` previously hard-coded to none.
 Together with the `DocumentedStatus` fix below, this is what lets a raw endpoint be documented at
 all: owning the response is not the same as having nothing to say about it. Both describe what the
-handler writes rather than changing what it writes, and both default to saying nothing, which is
-what a raw endpoint that really is undescribed wants. `ResponseType` is consulted only by the raw
-shape — the typed base classes take their response type from their own type argument, which is
-always more accurate than a restatement.
+handler writes rather than changing what it writes, so setting either moves the document and never
+the response. An unset `ResponseType` documents no body, and an unset `SuccessContentType` documents
+JSON once a body has been declared — so a raw endpoint that declares neither stays exactly as
+undescribed as it was. `ResponseType` is consulted only by the raw shape: the typed base classes take
+their response type from their own type argument, which is always more accurate than a restatement.
 
 **A group's tag is separable from its name.** `MapEndpointGroup(name, tag: ...)` publishes
 operations under a tag that is not the group name, and `EndpointOperationContext.Tag` carries it.
