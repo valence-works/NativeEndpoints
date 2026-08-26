@@ -8,7 +8,7 @@ namespace NativeEndpoints;
 /// </remarks>
 /// <param name="BodyMode">How the request body is treated.</param>
 /// <param name="StrictTypedParsing">
-/// Rejects a typed route or query value that does not parse, rather than falling back to the
+/// Rejects a typed route, query, header, or claim value that does not parse, rather than falling back to the
 /// parameter's default. Off by default because the lenient behaviour is what most published
 /// contracts already do, and turning it on can change an existing API's responses.
 /// </param>

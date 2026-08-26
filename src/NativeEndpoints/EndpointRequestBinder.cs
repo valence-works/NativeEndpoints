@@ -55,7 +55,7 @@ public enum EndpointBindingFailure
     MalformedBody,
 
     /// <summary>
-    /// A typed route or query value did not parse. Raised only under strict parsing.
+    /// A typed route, query, header, or claim value did not parse. Raised only under strict parsing.
     /// </summary>
     InvalidTypedValue
 }

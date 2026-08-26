@@ -102,8 +102,8 @@ public sealed class ApiEndpointOptions
     public EndpointBodyMode? BodyMode { get; set; }
 
     /// <summary>
-    /// Rejects a typed route or query value that does not parse, with a 400 naming it, rather than
-    /// falling back to the parameter's default.
+    /// Rejects a typed route, query, header, or claim value that does not parse, with a 400 naming
+    /// it, rather than falling back to the parameter's default.
     /// </summary>
     /// <remarks>
     /// Opt-in. The lenient fallback is what most published contracts already do, so turning this on

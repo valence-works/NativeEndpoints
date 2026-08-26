@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Xunit;
 
 namespace NativeEndpoints.Tests;
@@ -24,6 +25,30 @@ public class StartupValidationTests
 
         Assert.Contains("AddNativeEndpoints()", failure.Message);
         Assert.Contains("IEndpointProblemWriter", failure.Message);
+    }
+
+    [Fact]
+    public void A_scoped_problem_writer_registration_passes_the_map_time_check()
+    {
+        var builder = WebApplication.CreateBuilder();
+        // Scope validation is what made an instantiating probe throw here: a scoped writer is a
+        // legitimate lifetime for a request-coupled writer, and the check must observe the
+        // registration without resolving it from the root provider. Deliberately scoped-only —
+        // no AddNativeEndpoints — so the scoped registration is the one satisfying the check.
+        builder.Host.UseDefaultServiceProvider(options => options.ValidateScopes = true);
+        builder.Services.AddScoped<IEndpointProblemWriter, ScopedWriter>();
+        using var app = builder.Build();
+        var routes = (IEndpointRouteBuilder)app;
+
+        var group = routes.MapEndpointGroup("Startup");
+
+        Assert.Equal("Startup", group.Name);
+    }
+
+    private sealed class ScopedWriter : IEndpointProblemWriter
+    {
+        public Task WriteAsync(Microsoft.AspNetCore.Http.HttpContext context, EndpointProblem problem) =>
+            Task.CompletedTask;
     }
 
     [Fact]

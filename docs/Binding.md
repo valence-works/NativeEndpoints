@@ -130,7 +130,7 @@ options.Accepts = ["*/*", "application/json"];
 
 ## Strict parsing
 
-By default a typed route or query value that does not parse falls back to the parameter's default:
+By default a typed route, query, header, or claim value that does not parse falls back to the parameter's default:
 `?page=notanumber` binds `0`. That is what most published contracts already do, so it is the default
 here too. It is also the one place the binder does bind silently, which sits awkwardly beside
 everything else on this page.

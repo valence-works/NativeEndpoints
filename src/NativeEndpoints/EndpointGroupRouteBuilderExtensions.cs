@@ -59,8 +59,13 @@ public static class EndpointGroupRouteBuilderExtensions
         // AddNativeEndpoints installs, or one keyed by this group's name — because those are
         // exactly the two the failure path consults per request; a host composing only keyed
         // per-group writers is a working configuration, not a misconfiguration.
-        if (services.GetService<IEndpointProblemWriter>() is null &&
-            (services as IKeyedServiceProvider)?.GetKeyedService(typeof(IEndpointProblemWriter), groupName) is null)
+        // Probed without instantiating: a host may legitimately register a scoped writer, and
+        // resolving that from the root provider would itself throw under scope validation. A
+        // container that cannot answer the question skips the check rather than guessing.
+        var registrationProbe = services.GetService<IServiceProviderIsService>();
+        if (registrationProbe is not null &&
+            !registrationProbe.IsService(typeof(IEndpointProblemWriter)) &&
+            services.GetService<IServiceProviderIsKeyedService>()?.IsKeyedService(typeof(IEndpointProblemWriter), groupName) is not true)
         {
             throw new InvalidOperationException(
                 "No IEndpointProblemWriter is registered. " +
