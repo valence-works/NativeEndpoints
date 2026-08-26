@@ -12,6 +12,9 @@
     <Project Path="samples/PluginHost/Plugin/PluginHost.Plugin.csproj" />
     <Project Path="samples/PluginHost/Host/PluginHost.Host.csproj" />
   </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/NativeEndpoints.Benchmarks/NativeEndpoints.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/NativeEndpoints.Tests/NativeEndpoints.Tests.csproj" />
   </Folder>
