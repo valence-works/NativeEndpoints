@@ -23,6 +23,17 @@ public sealed record EndpointOperationDescriptor
     /// <summary>The stable operation identifier used in the endpoint name and inventory.</summary>
     public required string Operation { get; init; }
 
+    /// <summary>
+    /// The literal endpoint name, for an operation whose identifier cannot be derived from
+    /// <see cref="Operation"/>. Null derives it, which is what a new endpoint should do.
+    /// </summary>
+    /// <remarks>
+    /// This exists for operation identifiers that were published before a host's naming scheme and
+    /// are frozen in a document clients already generate from. Deriving is otherwise better: it keeps
+    /// one operation per folder and needs no <c>Configure</c> override at all.
+    /// </remarks>
+    public string? Name { get; init; }
+
     /// <summary>How the request body is treated. Null defaults by HTTP method.</summary>
     public EndpointBodyMode? BodyMode { get; init; }
 
@@ -40,6 +51,16 @@ public sealed record EndpointOperationDescriptor
 
     /// <summary>The success response body type. Null means no body.</summary>
     public Type? ResponseType { get; init; }
+
+    /// <summary>
+    /// The content type the success response is documented as. Null documents JSON.
+    /// </summary>
+    /// <remarks>
+    /// The documented type, not the written one: an operation that owns its own response — a
+    /// server-sent event stream, a rendered page — writes its content type itself, and this is how
+    /// the document says so.
+    /// </remarks>
+    public string? SuccessContentType { get; init; }
 
     /// <summary>The status written at runtime on success.</summary>
     public int SuccessStatus { get; init; } = StatusCodes.Status200OK;
@@ -67,4 +88,19 @@ public sealed record EndpointOperationDescriptor
     /// the caller sent and the binder could not read is worth reporting.
     /// </remarks>
     public bool StrictTypedParsing { get; init; }
+
+    /// <summary>
+    /// Whether an unhandled exception is answered by the group's failure path. False lets it
+    /// propagate to the host's exception pipeline instead.
+    /// </summary>
+    /// <remarks>
+    /// Containment is the right default: the group owns the operation's failure contract, so it
+    /// answers faults with the problem shape the operation documents. But an owner whose published
+    /// contract makes the host's pipeline responsible for unexpected failures — one already running
+    /// its own exception middleware, or serving a UI whose error page is not a problem document —
+    /// needs the exception to reach it unswallowed. Only the response-owning paths honour this;
+    /// a bound operation always contains, because its failure translation is what turns a domain
+    /// exception into the documented status.
+    /// </remarks>
+    public bool ContainFailures { get; init; } = true;
 }

@@ -32,6 +32,16 @@ omission surface as an opaque 500 on the first binding failure at runtime.
 | `name` | The calling assembly's simple name | Prefixes endpoint names, supplies the default OpenAPI tag, identifies endpoints in lifetime violation reports |
 | `jsonContext` | The host's configured `JsonOptions` | A source-generated serializer context governing both binding and writing |
 | `jsonContentType` | `application/json; charset=utf-8` | The exact Content-Type written on success |
+| `tag` | `name` | The OpenAPI tag the group's operations are published under |
+
+Name and tag are separate because they answer different questions. The name keeps endpoint
+identifiers unique across a host; the tag is how a document groups operations for a reader. Two
+groups can legitimately publish under one tag while keeping distinct names:
+
+```csharp
+app.MapEndpointGroup("Identity.Tokens", tag: "Identity").MapEndpointsFrom(tokensAssembly);
+app.MapEndpointGroup("Identity.Users", tag: "Identity").MapEndpointsFrom(usersAssembly);
+```
 
 ## Write an endpoint
 

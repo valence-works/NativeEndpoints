@@ -1,5 +1,62 @@
 # Changelog
 
+## Unreleased
+
+What a host needs to reproduce a document it did not originally generate, found by migrating a real
+API with a frozen OpenAPI contract onto the library. Every addition is inert unless asked for, so an
+existing host's document does not move.
+
+**An operation can declare its own name.** `options.Name` — and `EndpointOperationDescriptor.Name` —
+pins the endpoint name outright instead of deriving `{group}_{operation}`. This is for operation
+identifiers published before a naming scheme existed and already frozen in documents clients
+generate from: no `Operation` value produces `AspNetCoreIdentityLoginPage` under a
+`{Owner}Endpoints{Operation}` rule, so deriving cannot be the only option. Deriving stays the
+default and stays the better choice for anything new.
+
+**A response-owning endpoint can describe the response it owns.** `options.SuccessContentType`
+documents a body that is not JSON — a server-sent event stream, a rendered page — and
+`options.ResponseType` documents the body's type, which `MapRaw` previously hard-coded to none.
+Together with the `DocumentedStatus` fix below, this is what lets a raw endpoint be documented at
+all: owning the response is not the same as having nothing to say about it. Both describe what the
+handler writes rather than changing what it writes, so setting either moves the document and never
+the response. An unset `ResponseType` documents no body, and an unset `SuccessContentType` documents
+JSON once a body has been declared — so a raw endpoint that declares neither stays exactly as
+undescribed as it was. `ResponseType` is consulted only by the raw shape: the typed base classes take
+their response type from their own type argument, which is always more accurate than a restatement.
+
+**A group's tag is separable from its name.** `MapEndpointGroup(name, tag: ...)` publishes
+operations under a tag that is not the group name, and `EndpointOperationContext.Tag` carries it.
+The two answer different questions — the name keeps endpoint identifiers unique across a host, the
+tag groups operations for a reader — so several groups can share a tag while keeping distinct names.
+Defaults to the group name, as before.
+
+**A response-owning endpoint can decline failure containment.** `options.ContainFailures = false`
+lets an unhandled exception propagate to the host's exception pipeline instead of being answered by
+the group. Containment remains the default and remains right for almost everything; the opt-out is
+for an owner whose published contract makes the host responsible for unexpected failures — one
+already running its own exception middleware, or serving a UI whose error page is not a problem
+document. Only the response-owning shape honours it: a bound operation always contains, because its
+failure translation is what produces the documented status.
+
+### Fixed
+
+- **The unbound path dropped `DocumentedStatus` and `DocumentAuthResponses`.** `MapRaw`,
+  `MapUnboundBody`, and `MapGeneratedUnbound` built their operation context without either field, so
+  an explicit documented status was ignored and `DocumentAuthResponses` could not force the 401/403
+  pair on or off — a `bool?` whose documented "forces the pair on or off" contract was unreachable on
+  that path. The bound path forwarded both. The status drop was previously described as deliberate,
+  reasoning that an operation with no request contract has no result-carried status to diverge from;
+  that conflated `ApiEndpointWithResult`'s runtime status with an author's explicit declaration,
+  which an unbound operation is as entitled to make as any other. No reason was ever stated for the
+  auth-response drop.
+
+  This is the second time a setting reached one mapping path and not another —
+  `EndpointOperationDescriptor` was introduced in preview.3 precisely to stop it, and the unbound
+  path was not converted with the rest. So the fix is structural rather than two added lines: every
+  path now builds its context through one `Contextualize` method, the mirror of the single `Describe`
+  method every path already builds its descriptor through. `DescriptorForwardingTests` asserts
+  against the descriptor's own shape — a new field that reaches neither the context nor a documented
+  exemption list fails the build, rather than waiting to be noticed by a consumer.
 ## 1.0.0-preview.4
 
 Forms, in the shape the binder already had.

@@ -95,6 +95,13 @@ public sealed class ApiEndpointOptions
     /// <summary>The stable operation identifier used in the endpoint name and inventory.</summary>
     public string? Operation { get; set; }
 
+    /// <summary>
+    /// Overrides the derived endpoint name, for an operation identifier that is frozen in a
+    /// published document and predates the naming scheme. Null derives it, which is what everything
+    /// new should do.
+    /// </summary>
+    public string? Name { get; set; }
+
     /// <summary>Content types the request is accepted as. Also decides whether a request schema is documented.</summary>
     public string[]? Accepts { get; set; }
 
@@ -139,6 +146,28 @@ public sealed class ApiEndpointOptions
     /// </remarks>
     public bool StrictTypedParsing { get; set; }
 
+    /// <summary>
+    /// The success response body type, for an operation that writes its own response. Null
+    /// documents no body.
+    /// </summary>
+    /// <remarks>
+    /// Consulted only by the response-owning shape. The typed base classes take their response type
+    /// from their own type argument, which is always more accurate than a restatement here, so this
+    /// is ignored on those paths. An <see cref="ApiEndpoint"/> has no such type argument — it writes
+    /// the response itself — and this is how it says what it writes.
+    /// </remarks>
+    public Type? ResponseType { get; set; }
+
+    /// <summary>
+    /// The content type the success response is documented as. Null documents JSON.
+    /// </summary>
+    /// <remarks>
+    /// The documented type, not the written one. An <see cref="ApiEndpoint"/> that owns its own
+    /// response — an event stream, a rendered page — sets its content type on
+    /// <see cref="ApiEndpointBase.HttpContext"/> and declares it here so the document agrees.
+    /// </remarks>
+    public string? SuccessContentType { get; set; }
+
     /// <summary>The status written on success.</summary>
     public int SuccessStatus { get; set; } = StatusCodes.Status200OK;
 
@@ -151,6 +180,14 @@ public sealed class ApiEndpointOptions
     /// fallback policy that endpoint metadata cannot see.
     /// </summary>
     public bool? DocumentAuthResponses { get; set; }
+
+    /// <summary>
+    /// Whether an unhandled exception is answered by the group's failure path. False lets it
+    /// propagate to the host's exception pipeline instead. Honoured only by <see cref="ApiEndpoint"/>,
+    /// whose handler owns the whole response; a bound endpoint always contains, because its failure
+    /// translation is what produces the documented status.
+    /// </summary>
+    public bool ContainFailures { get; set; } = true;
 
     /// <summary>Registers an ordinary ASP.NET Core convention to apply to the mapped endpoint.</summary>
     public ApiEndpointOptions Convention(Action<IEndpointConventionBuilder> convention)
