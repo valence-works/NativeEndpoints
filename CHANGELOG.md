@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-preview.6
 
 **A body mode for contracts that reject a literal-null payload at the media gate.**
 `EndpointBodyMode.RequiredWithContentTypeAndPayload` behaves as `RequiredWithContentType` except
