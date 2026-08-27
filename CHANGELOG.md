@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-preview.5
 
 What a host needs to reproduce a document it did not originally generate, found by migrating a real
 API with a frozen OpenAPI contract onto the library. Every addition is inert unless asked for, so an
@@ -57,6 +57,7 @@ failure translation is what produces the documented status.
   method every path already builds its descriptor through. `DescriptorForwardingTests` asserts
   against the descriptor's own shape — a new field that reaches neither the context nor a documented
   exemption list fails the build, rather than waiting to be noticed by a consumer.
+
 ## 1.0.0-preview.4
 
 Forms, in the shape the binder already had.
