@@ -52,6 +52,7 @@ public class BodyModeMatrixTests : IAsyncDisposable
                         Map(group, "optional", "Optional", EndpointBodyMode.Optional);
                         Map(group, "required-ct", "RequiredWithContentType", EndpointBodyMode.RequiredWithContentType);
                         Map(group, "optional-ct", "OptionalWithContentType", EndpointBodyMode.OptionalWithContentType);
+                        Map(group, "required-ct-payload", "RequiredWithContentTypeAndPayload", EndpointBodyMode.RequiredWithContentTypeAndPayload);
 
                         // Default accepts: routing enforces AcceptsMetadata before the binder runs.
                         group.MapHandler<BodyModeProbe, BodyModeView>(
@@ -265,6 +266,55 @@ public class BodyModeMatrixTests : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var view = await response.Content.ReadFromJsonAsync<BodyModeView>();
         Assert.Equal(new BodyModeView("query", 8), view);
+    }
+
+    // ---- RequiredWithContentTypeAndPayload ----
+
+    [Fact]
+    public async Task RequiredWithContentTypeAndPayload_with_json_body_binds_from_the_body()
+    {
+        var response = await _client.PostAsync("/required-ct-payload", Json("""{"name":"gated","count":9}"""));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var view = await response.Content.ReadFromJsonAsync<BodyModeView>();
+        Assert.Equal(new BodyModeView("gated", 9), view);
+    }
+
+    [Fact]
+    public async Task RequiredWithContentTypeAndPayload_with_text_plain_is_a_bare_415_with_an_empty_body()
+    {
+        var response = await _client.PostAsync("/required-ct-payload", new StringContent("hello", Encoding.UTF8, "text/plain"));
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task RequiredWithContentTypeAndPayload_with_no_content_type_is_a_bare_415_with_an_empty_body()
+    {
+        var response = await _client.PostAsync("/required-ct-payload", Untyped("""{"name":"undeclared","count":5}"""));
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>The one case that separates this mode from <c>RequiredWithContentType</c>.</summary>
+    [Fact]
+    public async Task RequiredWithContentTypeAndPayload_with_null_json_body_is_a_bare_415_with_an_empty_body()
+    {
+        var response = await _client.PostAsync("/required-ct-payload", Json("null"));
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task RequiredWithContentTypeAndPayload_with_a_malformed_body_is_still_a_400_problem_document()
+    {
+        var response = await _client.PostAsync("/required-ct-payload", Json("{"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("serializerErrors", await response.Content.ReadAsStringAsync());
     }
 
     // ---- Default accepts ----

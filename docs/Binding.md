@@ -115,6 +115,12 @@ endpoint. A file is not converted from a string, so none of the rules above appl
 | `RequiredWithContentType` | As `Required`, but an absent content type is also unsupported media |
 | `Optional` | A JSON body is read when present; its absence binds from route and query instead |
 | `OptionalWithContentType` | As `Optional`, but the content type must match when one is declared |
+| `RequiredWithContentTypeAndPayload` | As `RequiredWithContentType`, but a literal-`null` payload is rejected at the media gate as a bare 415 too, rather than as a 400 |
+
+The last mode exists for published contracts whose body reader treated a literal-`null` payload
+exactly like an unsupported media type. It is not reachable by composing the others:
+`RequiredWithContentType` answers 400 for that payload, and `OptionalWithContentType` binds from
+route and query instead. A malformed body is still a 400 under every mode.
 
 ## Who answers a 415
 

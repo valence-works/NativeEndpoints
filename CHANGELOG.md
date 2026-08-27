@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+**A body mode for contracts that reject a literal-null payload at the media gate.**
+`EndpointBodyMode.RequiredWithContentTypeAndPayload` behaves as `RequiredWithContentType` except
+that a body deserializing to `null` is answered with a bare 415 rather than a 400 problem document.
+It reproduces a published contract in which the owner's body reader treated a literal-`null` payload
+exactly like an unsupported media type, and it is not reachable by composing the modes that already
+existed: `RequiredWithContentType` answers 400 for that payload, and `OptionalWithContentType` binds
+from route and query instead. A malformed body remains a 400 under all three. Reported from the Elsa
+migration (#6), where five live endpoints depend on the distinction.
+
 ## 1.0.0-preview.5
 
 What a host needs to reproduce a document it did not originally generate, found by migrating a real

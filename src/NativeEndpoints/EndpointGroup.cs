@@ -243,10 +243,12 @@ public sealed class EndpointGroup
 
             if (!binding.Succeeded)
             {
-                // The content-type-gated modes reject media types with a bare status, before any body
-                // is read, so there is no problem document to write.
+                // The content-type-gated modes reject an unsupported media type with a bare status, so
+                // there is no problem document to write. RequiredWithContentTypeAndPayload also
+                // arrives here for a literal-null payload, which it answers at the same gate.
                 if (binding.Failure is EndpointBindingFailure.UnsupportedMediaType &&
-                    effectiveBodyMode is EndpointBodyMode.RequiredWithContentType or EndpointBodyMode.OptionalWithContentType)
+                    effectiveBodyMode is EndpointBodyMode.RequiredWithContentType or EndpointBodyMode.OptionalWithContentType
+                        or EndpointBodyMode.RequiredWithContentTypeAndPayload)
                 {
                     context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
                     return;
