@@ -47,7 +47,20 @@ public enum EndpointBodyMode
     /// content type is a bare 415 — but a body that deserializes to <c>null</c> binds from route and
     /// query instead of being rejected.
     /// </summary>
-    OptionalWithContentType
+    OptionalWithContentType,
+
+    /// <summary>
+    /// As <see cref="RequiredWithContentType"/>, but a body that deserializes to <c>null</c> is also
+    /// rejected at the media gate as a bare 415 with no response body, rather than as a 400 problem.
+    /// </summary>
+    /// <remarks>
+    /// This reproduces a published contract in which the owner's body reader treated a literal-null
+    /// payload exactly like an unsupported media type: status only, before any problem shape exists.
+    /// The distinction is narrow but wire-visible, and it is not reachable by composing the other
+    /// modes: <see cref="RequiredWithContentType"/> answers 400 for that payload and
+    /// <see cref="OptionalWithContentType"/> binds from route and query instead.
+    /// </remarks>
+    RequiredWithContentTypeAndPayload
 }
 
 /// <summary>What an endpoint reads its request body as.</summary>
@@ -285,7 +298,8 @@ public static class EndpointRequestBinder
         var unsupported = bodyMode switch
         {
             EndpointBodyMode.Optional => false,
-            EndpointBodyMode.RequiredWithContentType or EndpointBodyMode.OptionalWithContentType => !isJson,
+            EndpointBodyMode.RequiredWithContentType or EndpointBodyMode.OptionalWithContentType
+                or EndpointBodyMode.RequiredWithContentTypeAndPayload => !isJson,
             _ => declared && !isJson
         };
 
@@ -336,6 +350,14 @@ public static class EndpointRequestBinder
 
         if (body is null && bodyMode is EndpointBodyMode.Required or EndpointBodyMode.RequiredWithContentType)
             return new(false, default, new(default, EndpointBindingFailure.MissingBody, "A request body is required."), null);
+
+        // The payload-gated mode answers a literal-null payload at the media gate rather than as a
+        // missing body, so the rejection stays a bare status with no problem document.
+        if (body is null && bodyMode is EndpointBodyMode.RequiredWithContentTypeAndPayload)
+        {
+            return new(false, default, new(default, EndpointBindingFailure.UnsupportedMediaType,
+                "The request body must contain a JSON payload."), null);
+        }
 
         return new(true, body, default, supplied);
     }
