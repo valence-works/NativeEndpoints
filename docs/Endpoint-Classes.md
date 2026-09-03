@@ -126,7 +126,7 @@ endpoint always contains, because its failure translation is what produces the d
 
 > **`Configure` runs on an uninitialized instance.** It is invoked once at map time, before any
 > constructor runs, so constructor-injected fields are null inside it. Read only the `options`
-> argument. `NE0003` warns when `Configure` reads that state.
+> argument. `NE0003` warns when `Configure` reads constructor-injected state.
 
 ## Reaching ASP.NET Core
 
